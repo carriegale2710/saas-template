@@ -225,33 +225,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       });
       if (error) throw error;
     },
-    deleteAccount: async () => {
-      // First delete user data from any related tables
-      const { error: dataError } = await supabase
-        .from('users')
-        .delete()
-        .eq('id', user?.id);
-      
-      if (dataError) throw dataError;
-
-      // Then delete the user's subscription if it exists
-      const { error: subscriptionError } = await supabase
-        .from('subscriptions')
-        .delete()
-        .eq('user_id', user?.id);
-
-      if (subscriptionError) throw subscriptionError;
-
-      // Finally delete the user's auth account
-      const { error: authError } = await supabase.auth.admin.deleteUser(
-        user?.id as string
-      );
-
-      if (authError) throw authError;
-
-      // Sign out after successful deletion
-      await supabase.auth.signOut();
-    },
     isSubscriber,
   };
 
