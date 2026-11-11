@@ -75,3 +75,7 @@ logs
 
 # Cursor
 .cursor/mcp.json
+
+# Playwright
+/test-results/
+/playwright-report/
