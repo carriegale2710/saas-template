@@ -106,7 +106,9 @@ describe('cancel', () => {
   it('500s when Stripe or the DB update fails', async () => {
     from.mockImplementation(fromByTable({ subscriptions: [owned()] }));
     stripe.subscriptions.retrieve.mockRejectedValue(new Error('stripe down'));
-    expect((await cancel(req({ subscriptionId: 'sub_1' }))).status).toBe(500);
+    const res = await cancel(req({ subscriptionId: 'sub_1' }));
+    expect(res.status).toBe(500);
+    expect(await res.json()).toEqual({ error: 'Failed to cancel subscription' });
 
     from.mockImplementation(fromByTable({ subscriptions: [owned(), queryBuilder({ error: { message: 'write' } })] }));
     stripe.subscriptions.retrieve.mockResolvedValue(stripeSub());
@@ -170,7 +172,9 @@ describe('sync', () => {
     stripe.customers.retrieve.mockResolvedValue({ id: 'cus_1', metadata: {} });
     expect((await sync(req({ subscriptionId: 'sub_1' }))).status).toBe(500);
     stripe.subscriptions.retrieve.mockRejectedValue(new Error('nope'));
-    expect((await sync(req({ subscriptionId: 'sub_1' }))).status).toBe(500);
+    const res = await sync(req({ subscriptionId: 'sub_1' }));
+    expect(res.status).toBe(500);
+    expect(await res.json()).toEqual({ error: 'Failed to sync subscription' });
   });
 
   it('500s when the insert fails', async () => {
