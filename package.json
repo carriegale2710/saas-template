@@ -10,6 +10,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
+    "test:e2e": "playwright test",
     "security:lint": "eslint app/api app/auth/callback/route.ts utils/cors.ts utils/supabase.ts utils/supabase-admin.ts utils/supabase-server.ts utils/stripe-server.ts supabase/functions app/layout.tsx next.config.js eslint.config.mjs",
     "security:deps": "npm audit --omit=dev --audit-level=high",
     "security:secrets": "gitleaks detect --source . --no-banner --redact",
@@ -44,6 +45,7 @@
   },
   "devDependencies": {
     "@eslint/eslintrc": "^3.3.7",
+    "@playwright/test": "^1.65.0",
     "@stripe/mcp": "^0.3.3",
     "@supabase/mcp-server-supabase": "^0.3.4",
     "@testing-library/react": "^16.3.3",
