@@ -117,11 +117,12 @@ async function checkExistingSubscription(customerId: string): Promise<boolean> {
 // 5. customer.subscription.pending_update_applied - When a pending update is applied
 // 6. customer.subscription.pending_update_expired - When a pending update expires
 // 7. customer.subscription.trial_will_end - When a trial is about to end
+// 8. invoice.paid - Refreshes subscription status/period from Stripe
+// 9. invoice.payment_failed - Stores Stripe's real status (usually past_due)
 
 // Other Important Events You Might Want to Handle:
+
 // Payment Related:
-// - invoice.paid - When an invoice is paid successfully
-// - invoice.payment_failed - When a payment fails
 // - invoice.upcoming - When an invoice is going to be created
 // - payment_intent.succeeded - When a payment is successful
 // - payment_intent.payment_failed - When a payment fails
@@ -160,7 +161,43 @@ export const POST = withCors(async function POST(request: NextRequest) {
 
     const event = stripe.webhooks.constructEvent(body, sig, webhookSecret);
     logWebhookEvent(`Event received: ${event.type}`, { id: event.id });
-    
+
+    // Idempotency: claim the event id before processing. A duplicate delivery hits the
+    // primary key and is acknowledged without being processed again.
+    // ponytail: claim-then-process. If processing throws we delete the claim so Stripe's
+    // retry can reprocess; a concurrent duplicate that arrives while the first attempt is
+    // still running is acked and skipped, so it relies on that first attempt's retry.
+    // Insert-after-success would avoid that window but lets parallel duplicates both run.
+    const { error: claimError } = await supabaseAdmin
+      .from('stripe_events')
+      .insert({ id: event.id, type: event.type });
+
+    if (claimError) {
+      if (claimError.code === '23505') {
+        logWebhookEvent('Duplicate event skipped', { id: event.id });
+        return NextResponse.json({ received: true, duplicate: true });
+      }
+      throw claimError;
+    }
+
+    try {
+      return await handleEvent(event);
+    } catch (error) {
+      await supabaseAdmin.from('stripe_events').delete().eq('id', event.id);
+      throw error;
+    }
+  } catch (err) {
+    logWebhookEvent('Webhook error', getErrorLogData(err));
+    return NextResponse.json(
+      { error: 'Webhook handler failed' },
+      { status: 400 }
+    );
+  }
+});
+
+async function handleEvent(event: Stripe.Event) {
+  const stripe = getStripeClient();
+
     switch (event.type) {
       case 'checkout.session.completed': {
         const session = event.data.object as Stripe.Checkout.Session;
@@ -276,32 +313,34 @@ export const POST = withCors(async function POST(request: NextRequest) {
         break;
       }
 
-      // Note: You might want to add handlers for these common events:
-      // case 'invoice.paid': {
-      //   const invoice = event.data.object as Stripe.Invoice;
-      //   // Handle successful payment
-      // }
+      case 'invoice.paid':
+      case 'invoice.payment_failed': {
+        const invoice = event.data.object as Stripe.Invoice;
+        const subscriptionId =
+          typeof invoice.subscription === 'string' ? invoice.subscription : invoice.subscription?.id;
 
-      // case 'invoice.payment_failed': {
-      //   const invoice = event.data.object as Stripe.Invoice;
-      //   // Handle failed payment, notify user
-      // }
+        // One-off invoices have no subscription to sync.
+        if (!subscriptionId) break;
 
-      // case 'customer.subscription.trial_will_end': {
-      //   const subscription = event.data.object as Stripe.Subscription;
-      //   // Notify user about trial ending
-      // }
+        // Store Stripe's real status (e.g. past_due after a failed payment, active after paid).
+        const subscription = await stripe.subscriptions.retrieve(subscriptionId);
+        const { error } = await supabaseAdmin
+          .from('subscriptions')
+          .update({
+            status: subscription.status,
+            cancel_at_period_end: subscription.cancel_at_period_end,
+            current_period_end: new Date(subscription.current_period_end * 1000).toISOString(),
+            updated_at: new Date().toISOString()
+          })
+          .eq('stripe_subscription_id', subscriptionId);
+
+        if (error) throw error;
+        break;
+      }
     }
 
     return NextResponse.json({ received: true });
-  } catch (err) {
-    logWebhookEvent('Webhook error', getErrorLogData(err));
-    return NextResponse.json(
-      { error: 'Webhook handler failed' },
-      { status: 400 }
-    );
-  }
-});
+}
 
 async function createSubscription(subscriptionId: string, userId: string, customerId: string) {
   const stripe = getStripeClient();
