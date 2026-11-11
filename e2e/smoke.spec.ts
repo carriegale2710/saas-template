@@ -6,8 +6,14 @@ const cors = {
   'access-control-allow-methods': '*',
 };
 
+let cspViolations: string[] = [];
+
 // Credential-free: every Supabase request is answered by a stub.
 test.beforeEach(async ({ page }) => {
+  cspViolations = [];
+  page.on('console', (m) => {
+    if (m.text().includes('Content Security Policy')) cspViolations.push(m.text());
+  });
   await page.route('http://127.0.0.1:54321/**', (r) => {
     const req = r.request();
     if (req.method() === 'OPTIONS') return r.fulfill({ status: 204, headers: cors });
@@ -19,6 +25,10 @@ test.beforeEach(async ({ page }) => {
       });
     return r.fulfill({ status: 200, headers: cors, json: [] });
   });
+});
+
+test.afterEach(() => {
+  expect(cspViolations).toEqual([]);
 });
 
 test('landing page renders hero', async ({ page }) => {
