@@ -47,7 +47,7 @@
     "@eslint/eslintrc": "^3.3.7",
     "@playwright/test": "^1.65.0",
     "@stripe/mcp": "^0.3.3",
-    "@supabase/mcp-server-supabase": "^0.3.4",
+    "@supabase/mcp-server-supabase": "^0.17.0",
     "@testing-library/react": "^16.3.3",
     "@types/lodash": "^4.17.25",
     "@types/node": "^22",
