@@ -131,7 +131,7 @@ describe('POST /api/email/send', () => {
     sendTransactionalEmail.mockResolvedValue({ success: false, error: 'boom' });
     const res = await call({ type: 'cancellation', to: 'a@b.co', userId: 'u1', data: {} });
     expect(res.status).toBe(500);
-    expect(await res.json()).toEqual({ error: 'boom', success: false });
+    expect(await res.json()).toEqual({ error: 'Failed to send email', success: false });
     expect(log.insert).toHaveBeenCalledWith(
       expect.objectContaining({ status: 'failed', error_message: 'boom' })
     );

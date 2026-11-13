@@ -194,8 +194,10 @@ export async function POST(request: NextRequest) {
     }
 
     if (!result.success) {
+      // Provider error stays in the DB log above; don't return it to the caller.
+      console.error('Email send failed:', result.error);
       return NextResponse.json(
-        { error: result.error, success: false },
+        { error: 'Failed to send email', success: false },
         { status: 500 }
       );
     }
