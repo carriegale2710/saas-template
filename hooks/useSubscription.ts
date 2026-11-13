@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useId } from 'react';
 import { useAuth } from '@/contexts/AuthContext';
 import debounce from 'lodash/debounce';
 
@@ -18,6 +18,7 @@ export interface Subscription {
 
 export function useSubscription() {
   const { user, session, supabase } = useAuth();
+  const instanceId = useId(); // unique channel name per hook instance
   const [subscription, setSubscription] = useState<Subscription | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -130,7 +131,7 @@ export function useSubscription() {
     if (!user) return;
 
     const channel = supabase
-      .channel('subscription_updates')
+      .channel(`subscription_updates_${instanceId}`)
       .on(
         'postgres_changes',
         {
@@ -152,7 +153,7 @@ export function useSubscription() {
     return () => {
       supabase.removeChannel(channel);
     };
-  }, [user, supabase, checkValidSubscription]);
+  }, [user, supabase, checkValidSubscription, instanceId]);
 
   useEffect(() => {
     let timeoutId: NodeJS.Timeout;
