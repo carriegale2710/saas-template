@@ -417,3 +417,216 @@ describe('POST /api/stripe/webhook', () => {
     expect(update.eq).toHaveBeenCalledWith('stripe_subscription_id', 'sub_1');
   });
 });
+
+describe('webhook claim and invoice regressions', () => {
+  it.each([null, []])('does not process or release an unfinished claim when reclaim returns %j', async (data) => {
+    const reclaim = queryBuilder({ data });
+    from.mockImplementation(fromByTable({
+      stripe_events: [
+        queryBuilder({ error: { code: '23505' } }),
+        queryBuilder({ data: { processed_at: null } }),
+        reclaim,
+      ],
+    }));
+    event('invoice.paid', { subscription: 'sub_1' });
+
+    const response = await hook();
+
+    expect(response.status).toBe(409);
+    expect(await response.json()).toEqual({ error: 'Event in progress' });
+    expect(stripe.subscriptions.retrieve).not.toHaveBeenCalled();
+    expect(from.mock.calls).toEqual(Array(3).fill(['stripe_events']));
+    expect(reclaim.delete).not.toHaveBeenCalled();
+  });
+
+  it('uses a five-minute cutoff and only completes the reclaimed event owned by this attempt', async () => {
+    const now = new Date('2026-11-14T12:00:00.000Z');
+    const reclaim = queryBuilder({ data: [{ id: 'evt_1' }] });
+    const done = queryBuilder({ data: [{ id: 'evt_1' }] });
+    from.mockImplementation(fromByTable({
+      stripe_events: [
+        queryBuilder({ error: { code: '23505' } }),
+        queryBuilder({ data: { processed_at: null } }),
+        reclaim,
+        done,
+      ],
+    }));
+    event('invoice.upcoming', {});
+    vi.useFakeTimers();
+    vi.setSystemTime(now);
+    try {
+      expect((await hook()).status).toBe(200);
+      expect(reclaim.lt).toHaveBeenCalledWith('created_at', '2026-11-14T11:55:00.000Z');
+      expect(reclaim.eq).toHaveBeenCalledWith('id', 'evt_1');
+      expect(reclaim.is).toHaveBeenCalledWith('processed_at', null);
+      expect(reclaim.update).toHaveBeenCalledWith({
+        created_at: now.toISOString(), attempt_id: expect.any(String),
+      });
+      const owner = reclaim.update.mock.calls[0][0].attempt_id;
+      expect(done.update).toHaveBeenCalledWith({ processed_at: now.toISOString() });
+      expect(done.eq.mock.calls).toEqual([['id', 'evt_1'], ['attempt_id', owner]]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('does not process or delete another attempt’s claim when reclaim fails', async () => {
+    const reclaim = queryBuilder({ error: { message: 'reclaim unavailable' } });
+    from.mockImplementation(fromByTable({
+      stripe_events: [
+        queryBuilder({ error: { code: '23505' } }),
+        queryBuilder({ data: { processed_at: null } }),
+        reclaim,
+      ],
+    }));
+    event('invoice.paid', { subscription: 'sub_1' });
+
+    const response = await hook();
+
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({ error: 'Webhook handler failed' });
+    expect(stripe.subscriptions.retrieve).not.toHaveBeenCalled();
+    expect(from).toHaveBeenCalledTimes(3);
+    expect(reclaim.delete).not.toHaveBeenCalled();
+  });
+
+  it('releases a reclaimed claim using the new owner when processing fails', async () => {
+    const claim = queryBuilder({ error: { code: '23505' } });
+    const reclaim = queryBuilder({ data: [{ id: 'evt_1' }] });
+    const release = queryBuilder();
+    from.mockImplementation(fromByTable({
+      stripe_events: [claim, queryBuilder({ data: { processed_at: null } }), reclaim, release],
+    }));
+    event('invoice.paid', { subscription: 'sub_1' });
+    stripe.subscriptions.retrieve.mockRejectedValue(new Error('Stripe unavailable'));
+
+    expect((await hook()).status).toBe(400);
+    expect(release.delete).toHaveBeenCalledOnce();
+    expect(release.eq.mock.calls).toEqual([
+      ['id', 'evt_1'], ['attempt_id', reclaim.update.mock.calls[0][0].attempt_id],
+    ]);
+    expect(release.update).not.toHaveBeenCalled();
+  });
+
+  it('processes a redelivery after a failed attempt with a fresh owner', async () => {
+    const firstClaim = queryBuilder();
+    const release = queryBuilder();
+    const retryClaim = queryBuilder();
+    const done = queryBuilder();
+    const update = queryBuilder();
+    from.mockImplementation(fromByTable({
+      stripe_events: [firstClaim, release, retryClaim, done],
+      subscriptions: [update],
+    }));
+    event('invoice.paid', { subscription: 'sub_1' });
+    stripe.subscriptions.retrieve
+      .mockRejectedValueOnce(new Error('temporary Stripe failure'))
+      .mockResolvedValueOnce(sub());
+
+    expect((await hook()).status).toBe(400);
+    expect((await hook()).status).toBe(200);
+    const firstOwner = firstClaim.insert.mock.calls[0][0].attempt_id;
+    const retryOwner = retryClaim.insert.mock.calls[0][0].attempt_id;
+    expect(retryOwner).not.toBe(firstOwner);
+    expect(release.eq).toHaveBeenCalledWith('attempt_id', firstOwner);
+    expect(done.eq).toHaveBeenCalledWith('attempt_id', retryOwner);
+    expect(update.update).toHaveBeenCalledOnce();
+    expect(stripe.subscriptions.retrieve).toHaveBeenCalledTimes(2);
+  });
+
+  describe.each(['invoice.paid', 'invoice.payment_failed'])('%s payloads', (type) => {
+    it.each([
+      { subscription: { id: 'sub_1' } },
+      { subscription: null, parent: { subscription_details: { subscription: 'sub_1' } } },
+      { parent: { subscription_details: { subscription: { id: 'sub_1' } } } },
+      { subscription: 'sub_1', parent: { subscription_details: { subscription: 'sub_other' } } },
+    ])('syncs Stripe values for subscription reference %j', async (invoice) => {
+      const update = queryBuilder();
+      const done = queryBuilder();
+      from.mockImplementation(fromByTable({ subscriptions: [update], stripe_events: [queryBuilder(), done] }));
+      event(type, invoice);
+      // Status must come from Stripe, even when it differs from the usual status for this event.
+      const status = type === 'invoice.paid' ? 'trialing' : 'unpaid';
+      stripe.subscriptions.retrieve.mockResolvedValue(sub({ status, cancel_at_period_end: true }));
+
+      expect((await hook()).status).toBe(200);
+      expect(stripe.subscriptions.retrieve).toHaveBeenCalledExactlyOnceWith('sub_1');
+      expect(update.update).toHaveBeenCalledWith({
+        status,
+        cancel_at_period_end: true,
+        current_period_end: new Date(PERIOD_END * 1000).toISOString(),
+        updated_at: expect.any(String),
+      });
+      expect(update.eq).toHaveBeenCalledWith('stripe_subscription_id', 'sub_1');
+      expect(done.update).toHaveBeenCalledOnce();
+      expect(done.update.mock.invocationCallOrder[0]).toBeGreaterThan(update.update.mock.invocationCallOrder[0]);
+    });
+
+    it.each([
+      {},
+      { subscription: null },
+      { parent: null },
+      { parent: { subscription_details: null } },
+      { parent: { subscription_details: { subscription: null } } },
+    ])('acknowledges a one-off invoice %j and marks its event processed', async (invoice) => {
+      const done = queryBuilder();
+      from.mockImplementation(fromByTable({ stripe_events: [queryBuilder(), done] }));
+      event(type, invoice);
+
+      const response = await hook();
+
+      expect(response.status).toBe(200);
+      expect(await response.json()).toEqual({ received: true });
+      expect(stripe.subscriptions.retrieve).not.toHaveBeenCalled();
+      expect(from).not.toHaveBeenCalledWith('subscriptions');
+      expect(done.update).toHaveBeenCalledWith({ processed_at: expect.any(String) });
+    });
+  });
+
+  it.each(['client_reference_id', 'customer', 'subscription'])('releases incomplete checkout sessions missing %s', async (field) => {
+    const release = queryBuilder();
+    from.mockImplementation(fromByTable({
+      stripe_events: [queryBuilder(), release], subscriptions: [queryBuilder({ data: null })],
+    }));
+    event('checkout.session.completed', session({ [field]: null }));
+
+    expect((await hook()).status).toBe(400);
+    expect(release.delete).toHaveBeenCalledOnce();
+    expect(release.update).not.toHaveBeenCalled();
+    expect(stripe.subscriptions.retrieve).not.toHaveBeenCalled();
+    expect(stripe.subscriptions.cancel).not.toHaveBeenCalled();
+  });
+
+  it('releases the checkout claim when cancellation of a duplicate subscription fails', async () => {
+    const release = queryBuilder();
+    from.mockImplementation(fromByTable({
+      stripe_events: [queryBuilder(), release],
+      subscriptions: [queryBuilder({ data: { stripe_subscription_id: 'sub_existing' } })],
+    }));
+    event('checkout.session.completed', session());
+    stripe.subscriptions.cancel.mockRejectedValue(new Error('Stripe unavailable'));
+
+    expect((await hook()).status).toBe(400);
+    expect(stripe.subscriptions.cancel).toHaveBeenCalledExactlyOnceWith('sub_1');
+    expect(release.delete).toHaveBeenCalledOnce();
+    expect(release.update).not.toHaveBeenCalled();
+    expect(stripe.subscriptions.retrieve).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    'customer.subscription.pending_update_applied',
+    'customer.subscription.pending_update_expired',
+    'customer.subscription.trial_will_end',
+  ])('%s releases its claim when the subscription sync fails', async (type) => {
+    const release = queryBuilder();
+    from.mockImplementation(fromByTable({
+      stripe_events: [queryBuilder(), release],
+      subscriptions: [queryBuilder({ error: { message: 'database unavailable' } })],
+    }));
+    event(type, sub());
+
+    expect((await hook()).status).toBe(400);
+    expect(release.delete).toHaveBeenCalledOnce();
+    expect(release.update).not.toHaveBeenCalled();
+  });
+});
