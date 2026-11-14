@@ -13,10 +13,11 @@ const csp = [
   "img-src 'self' data: blob: https:",
   "font-src 'self' data:",
   // Empty entries (e.g. NEXT_PUBLIC_SUPABASE_URL unset) are dropped.
-  ["connect-src 'self'", supabase, supabase.replace(/^http/, 'ws'), 'https://api.stripe.com', 'https://va.vercel-scripts.com', posthog, 'https://*.posthog.com']
+  ["connect-src 'self'", supabase, supabase.replace(/^http/, 'ws'), 'https://api.stripe.com', 'https://q.stripe.com', 'https://m.stripe.network', 'https://va.vercel-scripts.com', posthog, 'https://*.posthog.com']
     .filter(Boolean)
     .join(' '),
-  'frame-src https://js.stripe.com https://hooks.stripe.com https://buy.stripe.com https://checkout.stripe.com https://www.youtube.com',
+  // Stripe.js / Buy Button also embed frames from *.js.stripe.com and m.stripe.network.
+  'frame-src https://js.stripe.com https://*.js.stripe.com https://m.stripe.network https://hooks.stripe.com https://buy.stripe.com https://checkout.stripe.com https://www.youtube.com',
   "frame-ancestors 'none'",
   "object-src 'none'",
   "base-uri 'self'",

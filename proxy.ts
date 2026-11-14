@@ -13,23 +13,32 @@ const EXEMPT = new Set(['/api/stripe/webhook', '/api/email/send']);
 const hits = new Map<string, { count: number; resetAt: number }>();
 let lastSweep = 0;
 
-// Assumes the platform sets the real client IP (Vercel overwrites these headers). Behind a
-// proxy that only appends to x-forwarded-for, the leftmost entry is attacker-controlled; use
-// the rightmost entry added by your own proxy instead.
-function clientIp(headers: Headers) {
-  return (
-    headers.get('x-vercel-forwarded-for')?.split(',')[0].trim() ||
-    headers.get('x-real-ip')?.trim() ||
-    headers.get('x-forwarded-for')?.split(',')[0].trim() ||
-    'unknown'
-  );
+// Only trust a client-IP header that your deploy target sets itself:
+// - On Vercel, x-vercel-forwarded-for / x-real-ip carry the real client IP (set by the platform).
+// - Elsewhere, only the rightmost x-forwarded-for entry (appended by your own reverse proxy) is
+//   trustworthy; the leftmost is client-controlled. A Node server exposed directly with no
+//   reverse proxy keeps a client-supplied header as is, so a client can rotate it to dodge the
+//   limit; put it behind a proxy that appends the real client IP (nginx, ALB, ...).
+// Returns null when there is no IP; the caller then skips limiting (fail open) rather than
+// putting every client in one shared bucket.
+function clientIp(headers: Headers): string | null {
+  if (process.env.VERCEL) {
+    return (
+      headers.get('x-vercel-forwarded-for')?.split(',')[0].trim() ||
+      headers.get('x-real-ip')?.trim() ||
+      null
+    );
+  }
+  return headers.get('x-forwarded-for')?.split(',').pop()?.trim() || null;
 }
 
 export function proxy(request: NextRequest) {
   const path = request.nextUrl.pathname.replace(/\/+$/, '');
-  if (EXEMPT.has(path)) return NextResponse.next();
+  // CORS preflights are not real API calls; counting them would halve a browser client's budget.
+  if (EXEMPT.has(path) || request.method === 'OPTIONS') return NextResponse.next();
 
   const ip = clientIp(request.headers);
+  if (!ip) return NextResponse.next();
   const now = Date.now();
 
   let entry = hits.get(ip);
