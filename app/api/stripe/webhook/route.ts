@@ -1,9 +1,9 @@
-import { NextResponse } from 'next/server';
-import type { NextRequest } from 'next/server';
-import Stripe from 'stripe';
-import { supabaseAdmin } from '@/utils/supabase-admin';
-import { withCors } from '@/utils/cors';
-import { getStripeClient, getStripeWebhookSecret } from '@/utils/stripe-server';
+import { NextResponse } from "next/server";
+import type { NextRequest } from "next/server";
+import Stripe from "stripe";
+import { supabaseAdmin } from "@/utils/supabase-admin";
+import { withCors } from "@/utils/cors";
+import { getStripeClient, getStripeWebhookSecret } from "@/utils/stripe-server";
 
 // An unfinished event claim older than this is treated as abandoned and may be retaken.
 // Keep it above the function's max duration. If an attempt does outlive it, both attempts can
@@ -13,7 +13,10 @@ const STALE_CLAIM_MS = 5 * 60_000;
 // Helper function for consistent logging
 function logWebhookEvent(message: string, data?: unknown) {
   const timestamp = new Date().toISOString();
-  console.log(`[${timestamp}] WEBHOOK: ${message}`, data ? JSON.stringify(data, null, 2) : '');
+  console.log(
+    `[${timestamp}] WEBHOOK: ${message}`,
+    data ? JSON.stringify(data, null, 2) : "",
+  );
 }
 
 // Define interfaces for stored data
@@ -36,11 +39,13 @@ interface SubscriptionLogData {
   currentPeriodEnd?: number | string | null;
 }
 
-function getStripeSubscriptionLogData(subscription: Stripe.Subscription): SubscriptionLogData {
+function getStripeSubscriptionLogData(
+  subscription: Stripe.Subscription,
+): SubscriptionLogData {
   return {
     id: subscription.id,
     stripeCustomerId:
-      typeof subscription.customer === 'string'
+      typeof subscription.customer === "string"
         ? subscription.customer
         : subscription.customer?.id,
     status: subscription.status,
@@ -49,25 +54,28 @@ function getStripeSubscriptionLogData(subscription: Stripe.Subscription): Subscr
   };
 }
 
-function getStoredSubscriptionLogData(subscription: Record<string, unknown>): SubscriptionLogData {
+function getStoredSubscriptionLogData(
+  subscription: Record<string, unknown>,
+): SubscriptionLogData {
   return {
-    id: typeof subscription.id === 'string' ? subscription.id : undefined,
+    id: typeof subscription.id === "string" ? subscription.id : undefined,
     stripeSubscriptionId:
-      typeof subscription.stripe_subscription_id === 'string'
+      typeof subscription.stripe_subscription_id === "string"
         ? subscription.stripe_subscription_id
         : undefined,
     stripeCustomerId:
-      typeof subscription.stripe_customer_id === 'string'
+      typeof subscription.stripe_customer_id === "string"
         ? subscription.stripe_customer_id
         : undefined,
-    status: typeof subscription.status === 'string' ? subscription.status : undefined,
+    status:
+      typeof subscription.status === "string" ? subscription.status : undefined,
     cancelAtPeriodEnd:
-      typeof subscription.cancel_at_period_end === 'boolean'
+      typeof subscription.cancel_at_period_end === "boolean"
         ? subscription.cancel_at_period_end
         : undefined,
     currentPeriodEnd:
-      typeof subscription.current_period_end === 'string' ||
-      typeof subscription.current_period_end === 'number'
+      typeof subscription.current_period_end === "string" ||
+      typeof subscription.current_period_end === "number"
         ? subscription.current_period_end
         : null,
   };
@@ -81,10 +89,13 @@ function getErrorLogData(error: unknown) {
     };
   }
 
-  if (typeof error === 'object' && error !== null) {
+  if (typeof error === "object" && error !== null) {
     const message =
-      'message' in error && typeof error.message === 'string' ? error.message : 'Unknown error';
-    const name = 'name' in error && typeof error.name === 'string' ? error.name : 'Error';
+      "message" in error && typeof error.message === "string"
+        ? error.message
+        : "Unknown error";
+    const name =
+      "name" in error && typeof error.name === "string" ? error.name : "Error";
 
     return { name, message };
   }
@@ -105,10 +116,10 @@ export const config = {
 
 async function findActiveSubscription(customerId: string) {
   const { data: existingSubs } = await supabaseAdmin
-    .from('subscriptions')
-    .select('*')
-    .eq('stripe_customer_id', customerId)
-    .in('status', ['active', 'trialing'])
+    .from("subscriptions")
+    .select("*")
+    .eq("stripe_customer_id", customerId)
+    .in("status", ["active", "trialing"])
     .single();
 
   return existingSubs ?? null;
@@ -149,18 +160,18 @@ async function findActiveSubscription(customerId: string) {
 
 export const POST = withCors(async function POST(request: NextRequest) {
   const body = await request.text();
-  const sig = request.headers.get('stripe-signature');
+  const sig = request.headers.get("stripe-signature");
   const stripe = getStripeClient();
   const webhookSecret = getStripeWebhookSecret();
 
   try {
-    logWebhookEvent('Received webhook request');
+    logWebhookEvent("Received webhook request");
 
     if (!sig) {
-      logWebhookEvent('Missing stripe-signature header');
+      logWebhookEvent("Missing stripe-signature header");
       return NextResponse.json(
-        { error: 'Missing stripe-signature header' },
-        { status: 400 }
+        { error: "Missing stripe-signature header" },
+        { status: 400 },
       );
     }
 
@@ -174,21 +185,21 @@ export const POST = withCors(async function POST(request: NextRequest) {
     // if this attempt still owns it, so a slow attempt can't clobber the attempt that retook it.
     const attemptId = crypto.randomUUID();
     const { error: claimError } = await supabaseAdmin
-      .from('stripe_events')
+      .from("stripe_events")
       .insert({ id: event.id, type: event.type, attempt_id: attemptId });
 
     if (claimError) {
-      if (claimError.code !== '23505') throw claimError;
+      if (claimError.code !== "23505") throw claimError;
 
       const { data: existing, error: readError } = await supabaseAdmin
-        .from('stripe_events')
-        .select('processed_at')
-        .eq('id', event.id)
+        .from("stripe_events")
+        .select("processed_at")
+        .eq("id", event.id)
         .single();
       if (readError) throw readError;
 
       if (existing?.processed_at) {
-        logWebhookEvent('Duplicate event skipped', { id: event.id });
+        logWebhookEvent("Duplicate event skipped", { id: event.id });
         return NextResponse.json({ received: true, duplicate: true });
       }
 
@@ -196,59 +207,67 @@ export const POST = withCors(async function POST(request: NextRequest) {
       // so exactly one concurrent retry wins; the others see it as still in progress.
       const staleBefore = new Date(Date.now() - STALE_CLAIM_MS).toISOString();
       const { data: reclaimed, error: reclaimError } = await supabaseAdmin
-        .from('stripe_events')
+        .from("stripe_events")
         .update({ created_at: new Date().toISOString(), attempt_id: attemptId })
-        .eq('id', event.id)
-        .is('processed_at', null)
-        .lt('created_at', staleBefore)
-        .select('id');
+        .eq("id", event.id)
+        .is("processed_at", null)
+        .lt("created_at", staleBefore)
+        .select("id");
       if (reclaimError) throw reclaimError;
 
       if (!reclaimed || reclaimed.length === 0) {
         // Another attempt is processing it right now. Non-2xx so Stripe retries later.
-        logWebhookEvent('Event still in progress, asking Stripe to retry', { id: event.id });
-        return NextResponse.json({ error: 'Event in progress' }, { status: 409 });
+        logWebhookEvent("Event still in progress, asking Stripe to retry", {
+          id: event.id,
+        });
+        return NextResponse.json(
+          { error: "Event in progress" },
+          { status: 409 },
+        );
       }
-      logWebhookEvent('Reclaimed stale event claim', { id: event.id });
+      logWebhookEvent("Reclaimed stale event claim", { id: event.id });
     }
 
     try {
       const response = await handleEvent(event);
       const { data: doneRows, error: doneError } = await supabaseAdmin
-        .from('stripe_events')
+        .from("stripe_events")
         .update({ processed_at: new Date().toISOString() })
-        .eq('id', event.id)
-        .eq('attempt_id', attemptId)
-        .select('id');
+        .eq("id", event.id)
+        .eq("attempt_id", attemptId)
+        .select("id");
       // The event itself was processed, so this stays a 200 (a 200 means Stripe will not
       // redeliver; the unmarked claim is harmless). Log it so it is visible.
       if (doneError) {
-        logWebhookEvent('Failed to mark event processed', { id: event.id, ...getErrorLogData(doneError) });
+        logWebhookEvent("Failed to mark event processed", {
+          id: event.id,
+          ...getErrorLogData(doneError),
+        });
       } else if (Array.isArray(doneRows) && doneRows.length === 0) {
-        logWebhookEvent('Lost event claim before completion', { id: event.id });
+        logWebhookEvent("Lost event claim before completion", { id: event.id });
       }
       return response;
     } catch (error) {
       // Release the claim so Stripe's retry can reprocess immediately. If this delete fails,
       // the claim is reclaimed once it goes stale; log it for alerting.
       const { error: releaseError } = await supabaseAdmin
-        .from('stripe_events')
+        .from("stripe_events")
         .delete()
-        .eq('id', event.id)
-        .eq('attempt_id', attemptId);
+        .eq("id", event.id)
+        .eq("attempt_id", attemptId);
       if (releaseError) {
-        logWebhookEvent('Failed to release event claim', {
+        logWebhookEvent("Failed to release event claim", {
           id: event.id,
-          ...getErrorLogData(releaseError)
+          ...getErrorLogData(releaseError),
         });
       }
       throw error;
     }
   } catch (err) {
-    logWebhookEvent('Webhook error', getErrorLogData(err));
+    logWebhookEvent("Webhook error", getErrorLogData(err));
     return NextResponse.json(
-      { error: 'Webhook handler failed' },
-      { status: 400 }
+      { error: "Webhook handler failed" },
+      { status: 400 },
     );
   }
 });
@@ -256,227 +275,282 @@ export const POST = withCors(async function POST(request: NextRequest) {
 async function handleEvent(event: Stripe.Event) {
   const stripe = getStripeClient();
 
-    switch (event.type) {
-      case 'checkout.session.completed': {
-        const session = event.data.object as Stripe.Checkout.Session;
-        
-        // Block a second active subscription for the customer. The row for THIS session's own
-        // subscription is not a duplicate: a replayed event (retaken claim, manual redelivery)
-        // finds the row an earlier attempt created, and must not cancel it.
-        const activeSubscription = await findActiveSubscription(session.customer as string);
+  switch (event.type) {
+    case "checkout.session.completed": {
+      const session = event.data.object as Stripe.Checkout.Session;
 
-        if (activeSubscription && activeSubscription.stripe_subscription_id !== session.subscription) {
-          logWebhookEvent('Duplicate subscription attempt blocked', {
-            customerId: session.customer,
-            sessionId: session.id
-          });
-          
-          // Cancel the new subscription immediately
-          if (session.subscription) {
-            await stripe.subscriptions.cancel(session.subscription as string);
-          }
-          
-          return NextResponse.json({ 
-            status: 'blocked',
-            message: 'Customer already has an active subscription'
-          });
-        }
+      // Block a second active subscription for the customer. The row for THIS session's own
+      // subscription is not a duplicate: a replayed event (retaken claim, manual redelivery)
+      // finds the row an earlier attempt created, and must not cancel it.
+      const activeSubscription = await findActiveSubscription(
+        session.customer as string,
+      );
 
-        logWebhookEvent('Processing checkout.session.completed', {
-          sessionId: session.id,
-          clientReferenceId: session.client_reference_id,
+      if (
+        activeSubscription &&
+        activeSubscription.stripe_subscription_id !== session.subscription
+      ) {
+        logWebhookEvent("Duplicate subscription attempt blocked", {
           customerId: session.customer,
-          subscriptionId: session.subscription
+          sessionId: session.id,
         });
 
-        if (!session.client_reference_id || !session.customer || !session.subscription) {
-          logWebhookEvent('Missing required session data', {
-            clientReferenceId: session.client_reference_id,
-            customerId: session.customer,
-            subscriptionId: session.subscription
-          });
-          // Throw so the claim is released and Stripe's retry is not skipped as a duplicate.
-          throw new Error('Invalid session data');
+        // Cancel the new subscription immediately
+        if (session.subscription) {
+          await stripe.subscriptions.cancel(session.subscription as string);
         }
 
-        try {
-          const subscription = await createSubscription(
-            session.subscription as string,
-            session.client_reference_id!,
-            session.customer as string
-          );
-          logWebhookEvent(
-            'Successfully created subscription',
-            getStoredSubscriptionLogData(subscription)
-          );
-        } catch (error) {
-          logWebhookEvent('Failed to create subscription', getErrorLogData(error));
-          throw error;
-        }
-        break;
+        return NextResponse.json({
+          status: "blocked",
+          message: "Customer already has an active subscription",
+        });
       }
 
-      case 'customer.subscription.created': {
-        const subscription = event.data.object as Stripe.Subscription;
-        
-        // Check if we have the session data already
-        const sessionData = checkoutSessionMap.get(subscription.id);
-        if (sessionData) {
-          // We can create the subscription now
-          await createSubscription(
-            subscription.id,
-            sessionData.userId,
-            sessionData.customerId
-          );
-          checkoutSessionMap.delete(subscription.id);
-        } else {
-          // Store the subscription data until we get the session
-          pendingSubscriptions.set(subscription.id, {
-            id: subscription.id,
-            customer: subscription.customer as string
-          });
-        }
-        break;
+      logWebhookEvent("Processing checkout.session.completed", {
+        sessionId: session.id,
+        clientReferenceId: session.client_reference_id,
+        customerId: session.customer,
+        subscriptionId: session.subscription,
+      });
+
+      if (
+        !session.client_reference_id ||
+        !session.customer ||
+        !session.subscription
+      ) {
+        logWebhookEvent("Missing required session data", {
+          clientReferenceId: session.client_reference_id,
+          customerId: session.customer,
+          subscriptionId: session.subscription,
+        });
+        // Throw so the claim is released and Stripe's retry is not skipped as a duplicate.
+        throw new Error("Invalid session data");
       }
 
-      case 'customer.subscription.updated':
-      case 'customer.subscription.pending_update_applied':
-      case 'customer.subscription.pending_update_expired':
-      case 'customer.subscription.trial_will_end': {
-        const subscription = event.data.object as Stripe.Subscription;
-        
-        const { error: updateError } = await supabaseAdmin
-          .from('subscriptions')
-          .update({
-            status: subscription.status,
-            cancel_at_period_end: subscription.cancel_at_period_end,
-            current_period_end: new Date(subscription.current_period_end * 1000).toISOString(),
-            updated_at: new Date().toISOString()
-          })
-          .eq('stripe_subscription_id', subscription.id);
-        if (updateError) throw updateError;
-
-        break;
+      try {
+        const subscription = await createSubscription(
+          session.subscription as string,
+          session.client_reference_id!,
+          session.customer as string,
+        );
+        logWebhookEvent(
+          "Successfully created subscription",
+          getStoredSubscriptionLogData(subscription),
+        );
+      } catch (error) {
+        logWebhookEvent(
+          "Failed to create subscription",
+          getErrorLogData(error),
+        );
+        throw error;
       }
-
-      case 'customer.subscription.deleted': {
-        const subscription = event.data.object as Stripe.Subscription;
-        
-        const { error: deleteError } = await supabaseAdmin
-          .from('subscriptions')
-          .update({
-            status: subscription.status,
-            cancel_at_period_end: false,
-            current_period_end: new Date().toISOString(),
-            updated_at: new Date().toISOString()
-          })
-          .eq('stripe_subscription_id', subscription.id);
-        if (deleteError) throw deleteError;
-
-        break;
-      }
-
-      case 'invoice.paid':
-      case 'invoice.payment_failed': {
-        const invoice = event.data.object as Stripe.Invoice;
-        // `invoice.subscription` (API <= 2025-02-24.acacia) moved to
-        // `invoice.parent.subscription_details.subscription` on newer API versions.
-        const rawSubscription =
-          invoice.subscription ??
-          (invoice as unknown as {
-            parent?: { subscription_details?: { subscription?: string | { id: string } | null } };
-          }).parent?.subscription_details?.subscription;
-        const subscriptionId =
-          typeof rawSubscription === 'string' ? rawSubscription : rawSubscription?.id;
-
-        // One-off invoices have no subscription to sync.
-        if (!subscriptionId) break;
-
-        // Store Stripe's real status (e.g. past_due after a failed payment, active after paid).
-        const subscription = await stripe.subscriptions.retrieve(subscriptionId);
-        const { error } = await supabaseAdmin
-          .from('subscriptions')
-          .update({
-            status: subscription.status,
-            cancel_at_period_end: subscription.cancel_at_period_end,
-            current_period_end: new Date(subscription.current_period_end * 1000).toISOString(),
-            updated_at: new Date().toISOString()
-          })
-          .eq('stripe_subscription_id', subscriptionId);
-
-        if (error) throw error;
-        break;
-      }
+      break;
     }
 
-    return NextResponse.json({ received: true });
+    case "customer.subscription.created": {
+      const subscription = event.data.object as Stripe.Subscription;
+
+      // Check if we have the session data already
+      const sessionData = checkoutSessionMap.get(subscription.id);
+      if (sessionData) {
+        // We can create the subscription now
+        await createSubscription(
+          subscription.id,
+          sessionData.userId,
+          sessionData.customerId,
+        );
+        checkoutSessionMap.delete(subscription.id);
+      } else {
+        // Store the subscription data until we get the session
+        pendingSubscriptions.set(subscription.id, {
+          id: subscription.id,
+          customer: subscription.customer as string,
+        });
+      }
+      break;
+    }
+
+    case "customer.subscription.updated":
+    case "customer.subscription.pending_update_applied":
+    case "customer.subscription.pending_update_expired":
+    case "customer.subscription.trial_will_end": {
+      const subscription = event.data.object as Stripe.Subscription;
+
+      const { error: updateError } = await supabaseAdmin
+        .from("subscriptions")
+        .update({
+          status: subscription.status,
+          cancel_at_period_end: subscription.cancel_at_period_end,
+          current_period_end: new Date(
+            subscription.current_period_end * 1000,
+          ).toISOString(),
+          updated_at: new Date().toISOString(),
+        })
+        .eq("stripe_subscription_id", subscription.id);
+      if (updateError) throw updateError;
+
+      break;
+    }
+
+    case "customer.subscription.deleted": {
+      const subscription = event.data.object as Stripe.Subscription;
+
+      const { error: deleteError } = await supabaseAdmin
+        .from("subscriptions")
+        .update({
+          status: subscription.status,
+          cancel_at_period_end: false,
+          current_period_end: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        })
+        .eq("stripe_subscription_id", subscription.id);
+      if (deleteError) throw deleteError;
+
+      break;
+    }
+
+    case "invoice.paid":
+    case "invoice.payment_failed": {
+      const invoice = event.data.object as Stripe.Invoice;
+      // `invoice.subscription` (API <= 2025-02-24.acacia) moved to
+      // `invoice.parent.subscription_details.subscription` on newer API versions.
+      const rawSubscription =
+        invoice.subscription ??
+        (
+          invoice as unknown as {
+            parent?: {
+              subscription_details?: {
+                subscription?: string | { id: string } | null;
+              };
+            };
+          }
+        ).parent?.subscription_details?.subscription;
+      const subscriptionId =
+        typeof rawSubscription === "string"
+          ? rawSubscription
+          : rawSubscription?.id;
+
+      // One-off invoices have no subscription to sync.
+      if (!subscriptionId) break;
+
+      // Store Stripe's real status (e.g. past_due after a failed payment, active after paid).
+      const subscription = await stripe.subscriptions.retrieve(subscriptionId);
+      const { error } = await supabaseAdmin
+        .from("subscriptions")
+        .update({
+          status: subscription.status,
+          cancel_at_period_end: subscription.cancel_at_period_end,
+          current_period_end: new Date(
+            subscription.current_period_end * 1000,
+          ).toISOString(),
+          updated_at: new Date().toISOString(),
+        })
+        .eq("stripe_subscription_id", subscriptionId);
+
+      if (error) throw error;
+      break;
+    }
+  }
+
+  return NextResponse.json({ received: true });
 }
 
-async function createSubscription(subscriptionId: string, userId: string, customerId: string) {
+async function createSubscription(
+  subscriptionId: string,
+  userId: string,
+  customerId: string,
+) {
   const stripe = getStripeClient();
-  logWebhookEvent('Starting createSubscription', { subscriptionId, userId, customerId });
+  logWebhookEvent("Starting createSubscription", {
+    subscriptionId,
+    userId,
+    customerId,
+  });
 
   try {
-    const stripeSubscription = await stripe.subscriptions.retrieve(subscriptionId);
-    logWebhookEvent('Retrieved Stripe subscription', getStripeSubscriptionLogData(stripeSubscription));
+    const stripeSubscription =
+      await stripe.subscriptions.retrieve(subscriptionId);
+    logWebhookEvent(
+      "Retrieved Stripe subscription",
+      getStripeSubscriptionLogData(stripeSubscription),
+    );
 
     const { data: existingData, error: checkError } = await supabaseAdmin
-      .from('subscriptions')
-      .select('*')
-      .eq('stripe_subscription_id', subscriptionId)
+      .from("subscriptions")
+      .select("*")
+      .eq("stripe_subscription_id", subscriptionId)
       .single();
 
     if (checkError) {
-      logWebhookEvent('Error checking existing subscription', getErrorLogData(checkError));
+      logWebhookEvent(
+        "Error checking existing subscription",
+        getErrorLogData(checkError),
+      );
     }
 
     if (existingData) {
-      logWebhookEvent('Found existing subscription', getStoredSubscriptionLogData(existingData));
+      logWebhookEvent(
+        "Found existing subscription",
+        getStoredSubscriptionLogData(existingData),
+      );
       const { error: updateError } = await supabaseAdmin
-        .from('subscriptions')
+        .from("subscriptions")
         .update({
           status: stripeSubscription.status,
-          current_period_end: new Date(stripeSubscription.current_period_end * 1000).toISOString(),
+          current_period_end: new Date(
+            stripeSubscription.current_period_end * 1000,
+          ).toISOString(),
           cancel_at_period_end: stripeSubscription.cancel_at_period_end,
-          updated_at: new Date().toISOString()
+          updated_at: new Date().toISOString(),
         })
-        .eq('stripe_subscription_id', subscriptionId)
+        .eq("stripe_subscription_id", subscriptionId)
         .select()
         .single();
 
       if (updateError) {
-        logWebhookEvent('Error updating existing subscription', getErrorLogData(updateError));
+        logWebhookEvent(
+          "Error updating existing subscription",
+          getErrorLogData(updateError),
+        );
         throw updateError;
       }
       return existingData;
     }
 
-    logWebhookEvent('Creating new subscription record');
+    logWebhookEvent("Creating new subscription record");
     const { data, error: insertError } = await supabaseAdmin
-      .from('subscriptions')
+      .from("subscriptions")
       .insert({
         user_id: userId,
         stripe_customer_id: customerId,
         stripe_subscription_id: subscriptionId,
         status: stripeSubscription.status,
         price_id: stripeSubscription.items.data[0]?.price.id,
-        current_period_end: new Date(stripeSubscription.current_period_end * 1000).toISOString(),
+        current_period_end: new Date(
+          stripeSubscription.current_period_end * 1000,
+        ).toISOString(),
         cancel_at_period_end: stripeSubscription.cancel_at_period_end,
         created_at: new Date().toISOString(),
-        updated_at: new Date().toISOString()
+        updated_at: new Date().toISOString(),
       })
       .select()
       .single();
 
     if (insertError) {
-      logWebhookEvent('Error inserting new subscription', getErrorLogData(insertError));
+      logWebhookEvent(
+        "Error inserting new subscription",
+        getErrorLogData(insertError),
+      );
       throw insertError;
     }
 
-    logWebhookEvent('Successfully created new subscription', getStoredSubscriptionLogData(data));
+    logWebhookEvent(
+      "Successfully created new subscription",
+      getStoredSubscriptionLogData(data),
+    );
     return data;
   } catch (error) {
-    logWebhookEvent('Error in createSubscription', getErrorLogData(error));
+    logWebhookEvent("Error in createSubscription", getErrorLogData(error));
     throw error;
   }
-} 
+}
