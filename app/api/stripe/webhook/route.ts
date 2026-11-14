@@ -5,6 +5,9 @@ import { supabaseAdmin } from '@/utils/supabase-admin';
 import { withCors } from '@/utils/cors';
 import { getStripeClient, getStripeWebhookSecret } from '@/utils/stripe-server';
 
+// An unfinished event claim older than this is treated as abandoned and may be retaken.
+const STALE_CLAIM_MS = 5 * 60_000;
+
 // Helper function for consistent logging
 function logWebhookEvent(message: string, data?: unknown) {
   const timestamp = new Date().toISOString();
@@ -162,29 +165,62 @@ export const POST = withCors(async function POST(request: NextRequest) {
     const event = stripe.webhooks.constructEvent(body, sig, webhookSecret);
     logWebhookEvent(`Event received: ${event.type}`, { id: event.id });
 
-    // Idempotency: claim the event id before processing. A duplicate delivery hits the
-    // primary key and is acknowledged without being processed again.
-    // ponytail: claim-then-process. If processing throws we delete the claim so Stripe's
-    // retry can reprocess; a concurrent duplicate that arrives while the first attempt is
-    // still running is acked and skipped, so it relies on that first attempt's retry.
-    // Insert-after-success would avoid that window but lets parallel duplicates both run.
+    // Idempotency: claim the event id before processing. A claim is only "done" once
+    // processed_at is set, so an abandoned attempt (function killed mid-way, failed release)
+    // can be taken over after STALE_CLAIM_MS instead of blocking every Stripe retry forever.
     const { error: claimError } = await supabaseAdmin
       .from('stripe_events')
       .insert({ id: event.id, type: event.type });
 
     if (claimError) {
-      if (claimError.code === '23505') {
+      if (claimError.code !== '23505') throw claimError;
+
+      const { data: existing, error: readError } = await supabaseAdmin
+        .from('stripe_events')
+        .select('processed_at')
+        .eq('id', event.id)
+        .single();
+      if (readError) throw readError;
+
+      if (existing?.processed_at) {
         logWebhookEvent('Duplicate event skipped', { id: event.id });
         return NextResponse.json({ received: true, duplicate: true });
       }
-      throw claimError;
+
+      // Unfinished claim: take it over only if it is stale. The conditional update is atomic,
+      // so exactly one concurrent retry wins; the others see it as still in progress.
+      const staleBefore = new Date(Date.now() - STALE_CLAIM_MS).toISOString();
+      const { data: reclaimed, error: reclaimError } = await supabaseAdmin
+        .from('stripe_events')
+        .update({ created_at: new Date().toISOString() })
+        .eq('id', event.id)
+        .is('processed_at', null)
+        .lt('created_at', staleBefore)
+        .select('id');
+      if (reclaimError) throw reclaimError;
+
+      if (!reclaimed || reclaimed.length === 0) {
+        // Another attempt is processing it right now. Non-2xx so Stripe retries later.
+        logWebhookEvent('Event still in progress, asking Stripe to retry', { id: event.id });
+        return NextResponse.json({ error: 'Event in progress' }, { status: 409 });
+      }
+      logWebhookEvent('Reclaimed stale event claim', { id: event.id });
     }
 
     try {
-      return await handleEvent(event);
+      const response = await handleEvent(event);
+      const { error: doneError } = await supabaseAdmin
+        .from('stripe_events')
+        .update({ processed_at: new Date().toISOString() })
+        .eq('id', event.id);
+      if (doneError) {
+        // Processed but not marked: a Stripe retry will reprocess after the claim goes stale.
+        logWebhookEvent('Failed to mark event processed', { id: event.id, ...getErrorLogData(doneError) });
+      }
+      return response;
     } catch (error) {
-      // Release the claim so Stripe's retry can reprocess. If this delete fails the retry
-      // is skipped as a duplicate, so log it loudly for alerting.
+      // Release the claim so Stripe's retry can reprocess immediately. If this delete fails,
+      // the claim is reclaimed once it goes stale; log it for alerting.
       const { error: releaseError } = await supabaseAdmin
         .from('stripe_events')
         .delete()
@@ -296,7 +332,7 @@ async function handleEvent(event: Stripe.Event) {
       case 'customer.subscription.trial_will_end': {
         const subscription = event.data.object as Stripe.Subscription;
         
-        await supabaseAdmin
+        const { error: updateError } = await supabaseAdmin
           .from('subscriptions')
           .update({
             status: subscription.status,
@@ -305,14 +341,15 @@ async function handleEvent(event: Stripe.Event) {
             updated_at: new Date().toISOString()
           })
           .eq('stripe_subscription_id', subscription.id);
-        
+        if (updateError) throw updateError;
+
         break;
       }
 
       case 'customer.subscription.deleted': {
         const subscription = event.data.object as Stripe.Subscription;
         
-        await supabaseAdmin
+        const { error: deleteError } = await supabaseAdmin
           .from('subscriptions')
           .update({
             status: subscription.status,
@@ -321,7 +358,8 @@ async function handleEvent(event: Stripe.Event) {
             updated_at: new Date().toISOString()
           })
           .eq('stripe_subscription_id', subscription.id);
-        
+        if (deleteError) throw deleteError;
+
         break;
       }
 

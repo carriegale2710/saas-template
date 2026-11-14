@@ -67,16 +67,106 @@ describe('POST /api/stripe/webhook', () => {
     expect(claim.insert).toHaveBeenCalledWith({ id: 'evt_1', type: 'invoice.upcoming' });
   });
 
-  it('skips duplicate events (unique violation) with a 200', async () => {
+  it('skips already-processed duplicate events with a 200', async () => {
     const update = queryBuilder();
     from.mockImplementation(
-      fromByTable({ stripe_events: [queryBuilder({ error: { code: '23505' } })], subscriptions: [update] })
+      fromByTable({
+        stripe_events: [
+          queryBuilder({ error: { code: '23505' } }), // claim: unique violation
+          queryBuilder({ data: { processed_at: '2026-11-14T00:00:00Z' } }), // existing row is done
+        ],
+        subscriptions: [update],
+      })
     );
     event('customer.subscription.updated', sub());
     const res = await hook();
     expect(res.status).toBe(200);
     expect(await res.json()).toMatchObject({ duplicate: true });
     expect(update.update).not.toHaveBeenCalled();
+  });
+
+  it('409s (so Stripe retries later) while another attempt still holds a fresh claim', async () => {
+    const update = queryBuilder();
+    from.mockImplementation(
+      fromByTable({
+        stripe_events: [
+          queryBuilder({ error: { code: '23505' } }),
+          queryBuilder({ data: { processed_at: null } }), // unfinished
+          queryBuilder({ data: [] }), // reclaim matched nothing: claim is not stale
+        ],
+        subscriptions: [update],
+      })
+    );
+    event('customer.subscription.updated', sub());
+    expect((await hook()).status).toBe(409);
+    expect(update.update).not.toHaveBeenCalled();
+  });
+
+  it('retakes a stale unfinished claim, processes the event and marks it processed', async () => {
+    const reclaim = queryBuilder({ data: [{ id: 'evt_1' }] });
+    const markDone = queryBuilder();
+    const update = queryBuilder();
+    from.mockImplementation(
+      fromByTable({
+        stripe_events: [
+          queryBuilder({ error: { code: '23505' } }),
+          queryBuilder({ data: { processed_at: null } }),
+          reclaim,
+          markDone,
+        ],
+        subscriptions: [update],
+      })
+    );
+    event('customer.subscription.updated', sub());
+    expect((await hook()).status).toBe(200);
+    expect(reclaim.is).toHaveBeenCalledWith('processed_at', null);
+    expect(reclaim.lt).toHaveBeenCalledWith('created_at', expect.any(String));
+    expect(update.update).toHaveBeenCalled();
+    expect(markDone.update).toHaveBeenCalledWith({ processed_at: expect.any(String) });
+  });
+
+  it('marks the event processed after a successful run', async () => {
+    const claim = queryBuilder();
+    from.mockImplementation(fromByTable({ stripe_events: [claim] }));
+    event('invoice.upcoming', {});
+    expect((await hook()).status).toBe(200);
+    expect(claim.update).toHaveBeenCalledWith({ processed_at: expect.any(String) });
+  });
+
+  it('still 200s but logs when marking the event processed fails', async () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    from.mockImplementation(
+      fromByTable({ stripe_events: [queryBuilder(), queryBuilder({ error: { message: 'db blip' } })] })
+    );
+    event('invoice.upcoming', {});
+    expect((await hook()).status).toBe(200);
+    expect(log.mock.calls.some((c) => String(c[0]).includes('Failed to mark event processed'))).toBe(true);
+  });
+
+  it('400s when the existing claim cannot be read', async () => {
+    from.mockImplementation(
+      fromByTable({
+        stripe_events: [queryBuilder({ error: { code: '23505' } }), queryBuilder({ error: { message: 'down' } })],
+      })
+    );
+    event('customer.subscription.updated', sub());
+    expect((await hook()).status).toBe(400);
+  });
+
+  it.each([
+    ['customer.subscription.updated'],
+    ['customer.subscription.deleted'],
+  ])('%s 400s and releases the claim when the subscription update fails', async (type) => {
+    const release = queryBuilder();
+    from.mockImplementation(
+      fromByTable({
+        stripe_events: [queryBuilder(), release],
+        subscriptions: [queryBuilder({ error: { message: 'db' } })],
+      })
+    );
+    event(type, sub());
+    expect((await hook()).status).toBe(400);
+    expect(release.delete).toHaveBeenCalled();
   });
 
   it('400s (so Stripe retries) when the event id cannot be recorded', async () => {

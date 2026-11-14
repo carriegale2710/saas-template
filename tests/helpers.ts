@@ -11,7 +11,7 @@ export function queryBuilder(result: Result = { data: null, error: null }) {
   const builder: Record<string, unknown> = {};
   const resolved = Promise.resolve({ data: null, error: null, ...result });
   for (const m of [
-    'select', 'insert', 'update', 'upsert', 'delete', 'eq', 'in', 'order', 'limit',
+    'select', 'insert', 'update', 'upsert', 'delete', 'eq', 'in', 'is', 'lt', 'order', 'limit',
   ]) {
     builder[m] = vi.fn(() => builder);
   }
