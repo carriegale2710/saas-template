@@ -77,28 +77,16 @@ CREATE POLICY "Users can insert their own preferences" ON public.user_preference
 CREATE POLICY "Service role full access to preferences" ON public.user_preferences
   FOR ALL TO service_role USING (true);
 
--- User trials policies
+-- User trials policies (users read only; writes go through the service role)
 CREATE POLICY "Users can read their own trials" ON public.user_trials
   FOR SELECT USING (auth.uid() = user_id);
-
-CREATE POLICY "Users can update their own trials" ON public.user_trials
-  FOR UPDATE USING (auth.uid() = user_id);
-
-CREATE POLICY "Users can insert their own trials" ON public.user_trials
-  FOR INSERT WITH CHECK (auth.uid() = user_id);
 
 CREATE POLICY "Service role full access to trials" ON public.user_trials
   FOR ALL TO service_role USING (true);
 
--- Subscriptions policies
+-- Subscriptions policies (users read only; writes go through the service role)
 CREATE POLICY "Users can read their own subscriptions" ON public.subscriptions
   FOR SELECT USING (auth.uid() = user_id);
-
-CREATE POLICY "Users can update their own subscriptions" ON public.subscriptions
-  FOR UPDATE USING (auth.uid() = user_id);
-
-CREATE POLICY "Users can insert their own subscriptions" ON public.subscriptions
-  FOR INSERT WITH CHECK (auth.uid() = user_id);
 
 CREATE POLICY "Service role full access to subscriptions" ON public.subscriptions
   FOR ALL TO service_role USING (true);
