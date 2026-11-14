@@ -284,7 +284,7 @@ async function handleEvent(event: Stripe.Event) {
       case 'customer.subscription.trial_will_end': {
         const subscription = event.data.object as Stripe.Subscription;
         
-        await supabaseAdmin
+        const { error: updateError } = await supabaseAdmin
           .from('subscriptions')
           .update({
             status: subscription.status,
@@ -293,14 +293,15 @@ async function handleEvent(event: Stripe.Event) {
             updated_at: new Date().toISOString()
           })
           .eq('stripe_subscription_id', subscription.id);
-        
+
+        if (updateError) throw updateError;
         break;
       }
 
       case 'customer.subscription.deleted': {
         const subscription = event.data.object as Stripe.Subscription;
         
-        await supabaseAdmin
+        const { error: deleteError } = await supabaseAdmin
           .from('subscriptions')
           .update({
             status: subscription.status,
@@ -309,7 +310,8 @@ async function handleEvent(event: Stripe.Event) {
             updated_at: new Date().toISOString()
           })
           .eq('stripe_subscription_id', subscription.id);
-        
+
+        if (deleteError) throw deleteError;
         break;
       }
 
