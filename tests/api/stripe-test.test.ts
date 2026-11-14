@@ -57,4 +57,16 @@ describe('GET /api/stripe/test', () => {
     expect(response.status).toBe(500);
     expect(await response.json()).toEqual({ status: 'error', message: 'Stripe connection failed' });
   });
+
+  it('keeps structured Stripe errors in server logs', async () => {
+    const failure = { message: 'private Stripe details', requestId: 'req_private', raw: { key: 'private-token' } };
+    retrieveBalance.mockRejectedValue(failure);
+
+    const response = await GET(request());
+
+    expect(response.status).toBe(500);
+    expect(await response.json()).toEqual({ status: 'error', message: 'Stripe connection failed' });
+    expect(console.error).toHaveBeenCalledWith('Stripe test failed:', failure);
+  });
+
 });

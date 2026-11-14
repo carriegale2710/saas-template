@@ -7,6 +7,8 @@ vi.mock('next/navigation', () => ({
 }));
 vi.mock('@/app/preview-email/EmailPreview', () => ({ default: () => null }));
 
+import EmailPreview from '@/app/preview-email/EmailPreview';
+
 import EmailPreviewPage from '@/app/preview-email/page';
 
 describe('/preview-email', () => {
@@ -15,8 +17,8 @@ describe('/preview-email', () => {
     expect(() => EmailPreviewPage()).toThrow('NEXT_NOT_FOUND');
   });
 
-  it('renders outside production', () => {
-    vi.stubEnv('NODE_ENV', 'development');
-    expect(EmailPreviewPage()).toBeTruthy();
+  it.each(['development', 'test'])('renders the extracted preview in %s', (environment) => {
+    vi.stubEnv('NODE_ENV', environment);
+    expect(EmailPreviewPage().type).toBe(EmailPreview);
   });
 });
