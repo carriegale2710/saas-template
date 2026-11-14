@@ -105,10 +105,7 @@ export const POST = withCors(async function POST(request: NextRequest) {
     return NextResponse.json({ status: 'success' });
   } catch (error) {
     console.error('Subscription sync failed:', error);
-    return NextResponse.json({ 
-      error: 'Failed to sync subscription',
-      details: error instanceof Error ? error.message : 'Unknown error'
-    }, { status: 500 });
+    return NextResponse.json({ error: 'Failed to sync subscription' }, { status: 500 });
   }
 }); 
 

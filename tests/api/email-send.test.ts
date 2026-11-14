@@ -33,7 +33,8 @@ describe('POST /api/email/send', () => {
 
   it('401s for missing or wrong API key', async () => {
     expect((await call({}, null)).status).toBe(401);
-    expect((await call({}, 'wrong')).status).toBe(401);
+    expect((await call({}, 'wrong')).status).toBe(401); // length mismatch
+    expect((await call({}, 'secreT')).status).toBe(401); // same length
     expect(sendTransactionalEmail).not.toHaveBeenCalled();
   });
 
@@ -47,8 +48,10 @@ describe('POST /api/email/send', () => {
     expect((await call(body)).status).toBe(400);
   });
 
-  it('500s on malformed JSON', async () => {
-    expect((await call('{not json')).status).toBe(500);
+  it('500s on malformed JSON without leaking the error', async () => {
+    const res = await call('{not json');
+    expect(res.status).toBe(500);
+    expect(await res.json()).toEqual({ error: 'Failed to send email' });
   });
 
   it('sends directly to `to` without logging when no userId', async () => {
@@ -128,7 +131,7 @@ describe('POST /api/email/send', () => {
     sendTransactionalEmail.mockResolvedValue({ success: false, error: 'boom' });
     const res = await call({ type: 'cancellation', to: 'a@b.co', userId: 'u1', data: {} });
     expect(res.status).toBe(500);
-    expect(await res.json()).toEqual({ error: 'boom', success: false });
+    expect(await res.json()).toEqual({ error: 'Failed to send email', success: false });
     expect(log.insert).toHaveBeenCalledWith(
       expect.objectContaining({ status: 'failed', error_message: 'boom' })
     );

@@ -25,7 +25,7 @@ export const GET = withCors(async function GET(request: NextRequest) {
     console.error('Stripe test failed:', error);
     return NextResponse.json({ 
       status: 'error',
-      message: error instanceof Error ? error.message : 'Unknown error'
+      message: 'Stripe connection failed'
     }, { status: 500 });
   }
 }); 

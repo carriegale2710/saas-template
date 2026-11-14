@@ -124,10 +124,7 @@ describe('DELETE /api/user/delete', () => {
     const response = await DELETE(request());
 
     expect(response.status).toBe(500);
-    expect(await response.json()).toMatchObject({
-      error: 'Failed to update profile',
-      details: { message: 'write failed' },
-    });
+    expect(await response.json()).toEqual({ error: 'Failed to update profile' });
   });
 
   it('returns 500 when a dependency throws', async () => {
@@ -136,9 +133,6 @@ describe('DELETE /api/user/delete', () => {
     const response = await DELETE(request());
 
     expect(response.status).toBe(500);
-    expect(await response.json()).toEqual({
-      error: 'Failed to process account deletion',
-      details: 'auth service down',
-    });
+    expect(await response.json()).toEqual({ error: 'Failed to process account deletion' });
   });
 });
