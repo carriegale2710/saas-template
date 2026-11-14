@@ -307,6 +307,7 @@ Triggers watch for database changes and call the Edge Functions.
 3. Run the modified SQL
 4. Repeat for `supabase/scripts/setup/04-create-billing-cancellation-triggers.sql`
 5. **Existing databases only (created before the billing RLS fix):** run `supabase/scripts/setup/05-lock-down-billing-rls.sql`. It removes the policies that let users write their own `subscriptions` and `user_trials` rows. New installs from `initial_supabase_table_schema.sql` don't need it, but it is safe to run either way.
+6. **Required for the Stripe webhook:** run `supabase/scripts/setup/06-create-stripe-events-table.sql`. The webhook records each Stripe event id in the `stripe_events` table so duplicate deliveries are skipped. **Without this table every webhook request fails with a 400.** Run it before deploying, and make sure the Stripe webhook endpoint is subscribed to `invoice.paid` and `invoice.payment_failed`.
 
 **✅ Verification**: 
 - The SQL output should show "✅ Trigger Created Successfully!"

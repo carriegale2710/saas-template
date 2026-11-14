@@ -183,7 +183,18 @@ export const POST = withCors(async function POST(request: NextRequest) {
     try {
       return await handleEvent(event);
     } catch (error) {
-      await supabaseAdmin.from('stripe_events').delete().eq('id', event.id);
+      // Release the claim so Stripe's retry can reprocess. If this delete fails the retry
+      // is skipped as a duplicate, so log it loudly for alerting.
+      const { error: releaseError } = await supabaseAdmin
+        .from('stripe_events')
+        .delete()
+        .eq('id', event.id);
+      if (releaseError) {
+        logWebhookEvent('Failed to release event claim', {
+          id: event.id,
+          ...getErrorLogData(releaseError)
+        });
+      }
       throw error;
     }
   } catch (err) {
@@ -235,7 +246,8 @@ async function handleEvent(event: Stripe.Event) {
             customerId: session.customer,
             subscriptionId: session.subscription
           });
-          return NextResponse.json({ error: 'Invalid session data' }, { status: 400 });
+          // Throw so the claim is released and Stripe's retry is not skipped as a duplicate.
+          throw new Error('Invalid session data');
         }
 
         try {
@@ -316,8 +328,15 @@ async function handleEvent(event: Stripe.Event) {
       case 'invoice.paid':
       case 'invoice.payment_failed': {
         const invoice = event.data.object as Stripe.Invoice;
+        // `invoice.subscription` (API <= 2025-02-24.acacia) moved to
+        // `invoice.parent.subscription_details.subscription` on newer API versions.
+        const rawSubscription =
+          invoice.subscription ??
+          (invoice as unknown as {
+            parent?: { subscription_details?: { subscription?: string | { id: string } | null } };
+          }).parent?.subscription_details?.subscription;
         const subscriptionId =
-          typeof invoice.subscription === 'string' ? invoice.subscription : invoice.subscription?.id;
+          typeof rawSubscription === 'string' ? rawSubscription : rawSubscription?.id;
 
         // One-off invoices have no subscription to sync.
         if (!subscriptionId) break;

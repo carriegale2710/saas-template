@@ -125,6 +125,27 @@ describe('POST /api/stripe/webhook', () => {
     expect(stripe.subscriptions.retrieve).toHaveBeenCalledWith('sub_1');
   });
 
+  it('invoice.paid reads the subscription from invoice.parent on newer Stripe API versions', async () => {
+    const update = queryBuilder();
+    from.mockImplementation(fromByTable({ subscriptions: [update] }));
+    event('invoice.paid', { parent: { subscription_details: { subscription: 'sub_1' } } });
+    stripe.subscriptions.retrieve.mockResolvedValue(sub());
+    expect((await hook()).status).toBe(200);
+    expect(stripe.subscriptions.retrieve).toHaveBeenCalledWith('sub_1');
+    expect(update.update).toHaveBeenCalled();
+  });
+
+  it('logs loudly when releasing the event id fails, and still 400s', async () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const release = queryBuilder({ error: { message: 'db blip' } });
+    from.mockImplementation(fromByTable({ stripe_events: [queryBuilder(), release] }));
+    event('invoice.payment_failed', { subscription: 'sub_1' });
+    stripe.subscriptions.retrieve.mockRejectedValue(new Error('stripe down'));
+    expect((await hook()).status).toBe(400);
+    expect(release.delete).toHaveBeenCalled();
+    expect(log.mock.calls.some((c) => String(c[0]).includes('Failed to release event claim'))).toBe(true);
+  });
+
   it('invoice.paid without a subscription is acknowledged without writing', async () => {
     const update = queryBuilder();
     from.mockImplementation(fromByTable({ subscriptions: [update] }));
@@ -191,10 +212,14 @@ describe('POST /api/stripe/webhook', () => {
     expect(insert.insert).not.toHaveBeenCalled();
   });
 
-  it('400s on incomplete checkout sessions', async () => {
-    from.mockImplementation(fromByTable({ subscriptions: [queryBuilder({ data: null })] }));
+  it('400s on incomplete checkout sessions and releases the event id', async () => {
+    const release = queryBuilder();
+    from.mockImplementation(
+      fromByTable({ stripe_events: [queryBuilder(), release], subscriptions: [queryBuilder({ data: null })] })
+    );
     event('checkout.session.completed', session({ client_reference_id: null }));
     expect((await hook()).status).toBe(400);
+    expect(release.delete).toHaveBeenCalled();
   });
 
   it('400s when creating the subscription fails', async () => {
