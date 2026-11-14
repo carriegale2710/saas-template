@@ -135,4 +135,34 @@ describe('DELETE /api/user/delete', () => {
     expect(response.status).toBe(500);
     expect(await response.json()).toEqual({ error: 'Failed to process account deletion' });
   });
+
+  it('keeps structured profile errors in server logs and stops deletion', async () => {
+    const failure = { message: 'private SQL', details: 'private schema', hint: 'private hint', code: 'XX000' };
+    const subscriptionUpdate = queryBuilder();
+    from.mockImplementation(fromByTable({
+      subscriptions: [queryBuilder({ data: [] }), subscriptionUpdate],
+      users: [queryBuilder({ error: failure })],
+    }));
+
+    const response = await DELETE(request());
+
+    expect(response.status).toBe(500);
+    expect(await response.json()).toEqual({ error: 'Failed to update profile' });
+    expect(console.error).toHaveBeenCalledWith('Profile update error:', failure);
+    expect(subscriptionUpdate.update).not.toHaveBeenCalled();
+  });
+
+  it.each([{ message: 'private auth details', token: 'private-token' }, 'private failure', null])(
+    'redacts non-Error exceptions and retains diagnostics (%j)', async (failure) => {
+      getAuthenticatedUser.mockRejectedValue(failure);
+
+      const response = await DELETE(request());
+
+      expect(response.status).toBe(500);
+      expect(await response.json()).toEqual({ error: 'Failed to process account deletion' });
+      expect(console.error).toHaveBeenCalledWith('Error in account soft-deletion:', failure);
+      expect(from).not.toHaveBeenCalled();
+    }
+  );
+
 });

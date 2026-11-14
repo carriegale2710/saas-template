@@ -206,3 +206,37 @@ describe('sync', () => {
     expect((await sync(req({ subscriptionId: 'sub_1' }))).status).toBe(500);
   });
 });
+
+
+describe.each([
+  ['cancel', cancel, 'Failed to cancel subscription', 'Subscription cancellation failed:'],
+  ['sync', sync, 'Failed to sync subscription', 'Subscription sync failed:'],
+] as const)('%s error redaction', (_name, handler, message, logMessage) => {
+  it.each([
+    new Error('secret Stripe credential'),
+    { code: 'XX000', message: 'private SQL', details: 'private schema', hint: 'private hint' },
+    'private service failure',
+    null,
+  ])('redacts dependency failures and preserves server diagnostics (%j)', async (failure) => {
+    getAuthenticatedUser.mockRejectedValue(failure);
+
+    const response = await handler(req({ subscriptionId: 'sub_1' }));
+
+    expect(response.status).toBe(500);
+    expect(await response.json()).toEqual({ error: message });
+    expect(console.error).toHaveBeenCalledWith(logMessage, failure);
+    expect(from).not.toHaveBeenCalled();
+  });
+
+  it('redacts structured database lookup errors', async () => {
+    const failure = { code: 'XX000', message: 'private SQL', details: 'private schema', hint: 'private hint' };
+    from.mockImplementation(fromByTable({ subscriptions: [queryBuilder({ error: failure })] }));
+
+    const response = await handler(req({ subscriptionId: 'sub_1' }));
+
+    expect(response.status).toBe(500);
+    expect(await response.json()).toEqual({ error: message });
+    expect(console.error).toHaveBeenCalledWith(logMessage, failure);
+    expect(stripe.subscriptions.update).not.toHaveBeenCalled();
+  });
+});
