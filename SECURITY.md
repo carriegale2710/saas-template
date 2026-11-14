@@ -6,7 +6,7 @@ This repository includes a baseline security workflow for an open-source Next.js
 
 GitHub Actions runs the following checks on pull requests, default-branch pushes, and a weekly schedule where applicable:
 
-- **Dependency review** on pull requests to detect newly introduced vulnerable dependencies
+- **Dependency review** on pull requests to detect newly introduced vulnerable dependencies when `ENABLE_DEPENDENCY_REVIEW=true` and repository dependency-review prerequisites are enabled
 - **`npm audit --omit=dev --audit-level=high`** to catch high and critical runtime npm vulnerabilities from the lockfile
 - **CodeQL JavaScript/TypeScript analysis** for static application security scanning
 - **Gitleaks** to scan the repository history and working tree for committed secrets

@@ -5,9 +5,10 @@ import { fromByTable, queryBuilder } from '../helpers';
 
 const from = vi.fn();
 let authUser: { id: string } | null = { id: 'u1' };
+const session = { access_token: 'tok' };
 
 vi.mock('@/utils/supabase', () => ({ supabase: { from: (...a: unknown[]) => from(...a) } }));
-vi.mock('@/contexts/AuthContext', () => ({ useAuth: () => ({ user: authUser }) }));
+vi.mock('@/contexts/AuthContext', () => ({ useAuth: () => ({ user: authUser, session }) }));
 
 import { useTrialStatus } from '@/hooks/useTrialStatus';
 
@@ -23,6 +24,7 @@ describe('useTrialStatus', () => {
   beforeEach(() => {
     from.mockReset();
     authUser = { id: 'u1' };
+    vi.unstubAllGlobals();
   });
 
   it('is not in trial without a user', async () => {
@@ -67,22 +69,22 @@ describe('useTrialStatus', () => {
     expect((await run()).isInTrial).toBe(false);
   });
 
-  it('creates a 48 hour trial when none exists', async () => {
-    const upsert = queryBuilder({ data: { trial_end_time: 'created-end' } });
+  it('starts a trial via the server route when none exists (no client write)', async () => {
+    const end = hours(48);
+    const fetchMock = vi.fn(async () => Response.json({ trial_end_time: end, is_trial_used: false }));
+    vi.stubGlobal('fetch', fetchMock);
+    const trials = queryBuilder({ data: null });
     from.mockImplementation(
-      fromByTable({
-        subscriptions: [queryBuilder({ data: null })],
-        user_trials: [queryBuilder({ data: null }), upsert],
-      })
+      fromByTable({ subscriptions: [queryBuilder({ data: null })], user_trials: [trials] })
     );
-    const before = Date.now();
-    const r = await run();
-    expect(r).toMatchObject({ isInTrial: true, trialEndTime: 'created-end' });
-    const arg = upsert.upsert.mock.calls[0][0] as { user_id: string; trial_end_time: string; is_trial_used: boolean };
-    expect(arg.user_id).toBe('u1');
-    expect(arg.is_trial_used).toBe(false);
-    const delta = new Date(arg.trial_end_time).getTime() - before;
-    expect(Math.abs(delta - 48 * 3_600_000)).toBeLessThan(60_000);
+    expect(await run()).toMatchObject({ isInTrial: true, trialEndTime: end });
+    expect(fetchMock).toHaveBeenCalledWith('/api/user/trial', {
+      method: 'POST',
+      headers: { Authorization: 'Bearer tok' },
+    });
+    expect(trials.upsert).not.toHaveBeenCalled();
+    expect(trials.insert).not.toHaveBeenCalled();
+    expect(trials.update).not.toHaveBeenCalled();
   });
 
   it('falls back safely on query or insert errors', async () => {
@@ -97,9 +99,10 @@ describe('useTrialStatus', () => {
     from.mockImplementation(
       fromByTable({
         subscriptions: [queryBuilder({ data: null })],
-        user_trials: [queryBuilder({ data: null }), queryBuilder({ data: null, error: { message: 'ins' } })],
+        user_trials: [queryBuilder({ data: null })],
       })
     );
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(null, { status: 500 })));
     expect((await run()).isInTrial).toBe(false);
   });
 });

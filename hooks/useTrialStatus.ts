@@ -3,7 +3,7 @@ import { useAuth } from '@/contexts/AuthContext';
 import { supabase } from '@/utils/supabase';
 
 export function useTrialStatus() {
-  const { user } = useAuth();
+  const { user, session } = useAuth();
   const [isLoading, setIsLoading] = useState(true);
   const [trialStatus, setTrialStatus] = useState<{
     isInTrial: boolean;
@@ -57,24 +57,16 @@ export function useTrialStatus() {
             trialEndTime: trial.trial_end_time
           });
         } else {
-          // Create new trial for user
-          const trialEndTime = new Date();
-          trialEndTime.setHours(trialEndTime.getHours() + 48);
-
-          const { data: newTrial, error: insertError } = await supabase
-            .from('user_trials')
-            .upsert({ // Use upsert instead of insert to handle duplicates
-              user_id: user.id,
-              trial_end_time: trialEndTime.toISOString(),
-              is_trial_used: false
-            })
-            .select('trial_end_time')
-            .single();
-
-          if (insertError) throw insertError;
+          // Trial rows are server-written only (RLS); the route starts a 48h trial
+          const response = await fetch('/api/user/trial', {
+            method: 'POST',
+            headers: session?.access_token ? { Authorization: 'Bearer ' + session.access_token } : {},
+          });
+          if (!response.ok) throw new Error('Failed to start trial');
+          const newTrial = await response.json();
 
           setTrialStatus({
-            isInTrial: true,
+            isInTrial: !newTrial.is_trial_used && new Date() < new Date(newTrial.trial_end_time),
             trialEndTime: newTrial.trial_end_time
           });
         }
@@ -91,7 +83,7 @@ export function useTrialStatus() {
     }
 
     checkTrialStatus();
-  }, [user?.id]);
+  }, [user?.id, session?.access_token]);
 
   return { ...trialStatus, isLoading };
 }
