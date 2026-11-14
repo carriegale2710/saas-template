@@ -319,6 +319,37 @@ describe('POST /api/stripe/webhook', () => {
     expect(insert.insert).not.toHaveBeenCalled();
   });
 
+  it('does not cancel the subscription a replayed checkout event already created', async () => {
+    const update = queryBuilder({ data: { id: 'row1' } });
+    from.mockImplementation(
+      fromByTable({
+        subscriptions: [
+          // active-subscription check finds the row THIS session created earlier
+          queryBuilder({ data: { id: 'row1', stripe_subscription_id: 'sub_1', status: 'active' } }),
+          queryBuilder({ data: { id: 'row1', stripe_subscription_id: 'sub_1' } }),
+          update,
+        ],
+      })
+    );
+    event('checkout.session.completed', session());
+    stripe.subscriptions.retrieve.mockResolvedValue(sub());
+    const res = await hook();
+    expect(res.status).toBe(200);
+    expect(await res.json()).not.toMatchObject({ status: 'blocked' });
+    expect(stripe.subscriptions.cancel).not.toHaveBeenCalled();
+    expect(update.update).toHaveBeenCalledWith(expect.objectContaining({ status: 'active' }));
+  });
+
+  it('still 200s but logs when the claim was lost before completion', async () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    from.mockImplementation(
+      fromByTable({ stripe_events: [queryBuilder(), queryBuilder({ data: [] })] }) // update matched no row
+    );
+    event('invoice.upcoming', {});
+    expect((await hook()).status).toBe(200);
+    expect(log.mock.calls.some((c) => String(c[0]).includes('Lost event claim before completion'))).toBe(true);
+  });
+
   it('400s on incomplete checkout sessions and releases the event id', async () => {
     const release = queryBuilder();
     from.mockImplementation(

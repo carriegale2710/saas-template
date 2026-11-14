@@ -103,7 +103,7 @@ export const config = {
   },
 };
 
-async function checkExistingSubscription(customerId: string): Promise<boolean> {
+async function findActiveSubscription(customerId: string) {
   const { data: existingSubs } = await supabaseAdmin
     .from('subscriptions')
     .select('*')
@@ -111,7 +111,7 @@ async function checkExistingSubscription(customerId: string): Promise<boolean> {
     .in('status', ['active', 'trialing'])
     .single();
 
-  return !!existingSubs;
+  return existingSubs ?? null;
 }
 
 // Currently Handled Events:
@@ -214,14 +214,18 @@ export const POST = withCors(async function POST(request: NextRequest) {
 
     try {
       const response = await handleEvent(event);
-      const { error: doneError } = await supabaseAdmin
+      const { data: doneRows, error: doneError } = await supabaseAdmin
         .from('stripe_events')
         .update({ processed_at: new Date().toISOString() })
         .eq('id', event.id)
-        .eq('attempt_id', attemptId);
+        .eq('attempt_id', attemptId)
+        .select('id');
+      // The event itself was processed, so this stays a 200 (a 200 means Stripe will not
+      // redeliver; the unmarked claim is harmless). Log it so it is visible.
       if (doneError) {
-        // Processed but not marked: a Stripe retry will reprocess after the claim goes stale.
         logWebhookEvent('Failed to mark event processed', { id: event.id, ...getErrorLogData(doneError) });
+      } else if (Array.isArray(doneRows) && doneRows.length === 0) {
+        logWebhookEvent('Lost event claim before completion', { id: event.id });
       }
       return response;
     } catch (error) {
@@ -256,10 +260,12 @@ async function handleEvent(event: Stripe.Event) {
       case 'checkout.session.completed': {
         const session = event.data.object as Stripe.Checkout.Session;
         
-        // Check for existing active subscription
-        const hasActiveSubscription = await checkExistingSubscription(session.customer as string);
-        
-        if (hasActiveSubscription) {
+        // Block a second active subscription for the customer. The row for THIS session's own
+        // subscription is not a duplicate: a replayed event (retaken claim, manual redelivery)
+        // finds the row an earlier attempt created, and must not cancel it.
+        const activeSubscription = await findActiveSubscription(session.customer as string);
+
+        if (activeSubscription && activeSubscription.stripe_subscription_id !== session.subscription) {
           logWebhookEvent('Duplicate subscription attempt blocked', {
             customerId: session.customer,
             sessionId: session.id
