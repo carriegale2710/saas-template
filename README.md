@@ -306,6 +306,7 @@ Triggers watch for database changes and call the Edge Functions.
    - `YOUR_SUPABASE_ANON_KEY` → Your anon key (find at Project Settings → API)
 3. Run the modified SQL
 4. Repeat for `supabase/scripts/setup/04-create-billing-cancellation-triggers.sql`
+5. **Existing databases only (created before the billing RLS fix):** run `supabase/scripts/setup/05-lock-down-billing-rls.sql`. It removes the policies that let users write their own `subscriptions` and `user_trials` rows. New installs from `initial_supabase_table_schema.sql` don't need it, but it is safe to run either way.
 
 **✅ Verification**: 
 - The SQL output should show "✅ Trigger Created Successfully!"
