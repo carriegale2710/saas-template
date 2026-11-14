@@ -8,11 +8,14 @@ const posthog = process.env.NEXT_PUBLIC_POSTHOG_HOST || 'https://app.posthog.com
 // Move to a nonce-based CSP in proxy.ts if 'unsafe-inline' for scripts becomes a concern.
 const csp = [
   "default-src 'self'",
-  `script-src 'self' 'unsafe-inline'${isDev ? " 'unsafe-eval'" : ''} https://js.stripe.com https://va.vercel-scripts.com https://*.posthog.com`,
+  `script-src 'self' 'unsafe-inline'${isDev ? " 'unsafe-eval'" : ''} https://js.stripe.com https://va.vercel-scripts.com ${posthog} https://*.posthog.com`,
   "style-src 'self' 'unsafe-inline'",
   "img-src 'self' data: blob: https:",
   "font-src 'self' data:",
-  `connect-src 'self' ${supabase} ${supabase.replace(/^http/, 'ws')} https://api.stripe.com https://va.vercel-scripts.com ${posthog} https://*.posthog.com`,
+  // Empty entries (e.g. NEXT_PUBLIC_SUPABASE_URL unset) are dropped.
+  ["connect-src 'self'", supabase, supabase.replace(/^http/, 'ws'), 'https://api.stripe.com', 'https://va.vercel-scripts.com', posthog, 'https://*.posthog.com']
+    .filter(Boolean)
+    .join(' '),
   'frame-src https://js.stripe.com https://hooks.stripe.com https://buy.stripe.com https://checkout.stripe.com https://www.youtube.com',
   "frame-ancestors 'none'",
   "object-src 'none'",
