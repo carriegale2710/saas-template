@@ -6,6 +6,8 @@ import { withCors } from '@/utils/cors';
 import { getStripeClient, getStripeWebhookSecret } from '@/utils/stripe-server';
 
 // An unfinished event claim older than this is treated as abandoned and may be retaken.
+// Keep it above the function's max duration. If an attempt does outlive it, both attempts can
+// run the handler; the handlers are state syncs from Stripe, so the second run is harmless.
 const STALE_CLAIM_MS = 5 * 60_000;
 
 // Helper function for consistent logging
@@ -168,9 +170,12 @@ export const POST = withCors(async function POST(request: NextRequest) {
     // Idempotency: claim the event id before processing. A claim is only "done" once
     // processed_at is set, so an abandoned attempt (function killed mid-way, failed release)
     // can be taken over after STALE_CLAIM_MS instead of blocking every Stripe retry forever.
+    // attemptId identifies this attempt's claim: completion and release only touch the claim
+    // if this attempt still owns it, so a slow attempt can't clobber the attempt that retook it.
+    const attemptId = crypto.randomUUID();
     const { error: claimError } = await supabaseAdmin
       .from('stripe_events')
-      .insert({ id: event.id, type: event.type });
+      .insert({ id: event.id, type: event.type, attempt_id: attemptId });
 
     if (claimError) {
       if (claimError.code !== '23505') throw claimError;
@@ -192,7 +197,7 @@ export const POST = withCors(async function POST(request: NextRequest) {
       const staleBefore = new Date(Date.now() - STALE_CLAIM_MS).toISOString();
       const { data: reclaimed, error: reclaimError } = await supabaseAdmin
         .from('stripe_events')
-        .update({ created_at: new Date().toISOString() })
+        .update({ created_at: new Date().toISOString(), attempt_id: attemptId })
         .eq('id', event.id)
         .is('processed_at', null)
         .lt('created_at', staleBefore)
@@ -212,7 +217,8 @@ export const POST = withCors(async function POST(request: NextRequest) {
       const { error: doneError } = await supabaseAdmin
         .from('stripe_events')
         .update({ processed_at: new Date().toISOString() })
-        .eq('id', event.id);
+        .eq('id', event.id)
+        .eq('attempt_id', attemptId);
       if (doneError) {
         // Processed but not marked: a Stripe retry will reprocess after the claim goes stale.
         logWebhookEvent('Failed to mark event processed', { id: event.id, ...getErrorLogData(doneError) });
@@ -224,7 +230,8 @@ export const POST = withCors(async function POST(request: NextRequest) {
       const { error: releaseError } = await supabaseAdmin
         .from('stripe_events')
         .delete()
-        .eq('id', event.id);
+        .eq('id', event.id)
+        .eq('attempt_id', attemptId);
       if (releaseError) {
         logWebhookEvent('Failed to release event claim', {
           id: event.id,

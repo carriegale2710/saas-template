@@ -10,11 +10,13 @@ CREATE TABLE IF NOT EXISTS public.stripe_events (
     id TEXT PRIMARY KEY, -- Stripe event id (evt_...)
     type TEXT NOT NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    processed_at TIMESTAMPTZ
+    processed_at TIMESTAMPTZ,
+    attempt_id TEXT -- owner of the current claim; only that attempt may finish or release it
 );
 
 -- For databases that already ran an earlier version of this script.
 ALTER TABLE public.stripe_events ADD COLUMN IF NOT EXISTS processed_at TIMESTAMPTZ;
+ALTER TABLE public.stripe_events ADD COLUMN IF NOT EXISTS attempt_id TEXT;
 
 -- RLS on with no policies: anon/authenticated get no access,
 -- the service role bypasses RLS.

@@ -64,7 +64,7 @@ describe('POST /api/stripe/webhook', () => {
     from.mockImplementation(fromByTable({ stripe_events: [claim] }));
     event('invoice.upcoming', {});
     expect((await hook()).status).toBe(200);
-    expect(claim.insert).toHaveBeenCalledWith({ id: 'evt_1', type: 'invoice.upcoming' });
+    expect(claim.insert).toHaveBeenCalledWith({ id: 'evt_1', type: 'invoice.upcoming', attempt_id: expect.any(String) });
   });
 
   it('skips already-processed duplicate events with a 200', async () => {
@@ -123,6 +123,23 @@ describe('POST /api/stripe/webhook', () => {
     expect(reclaim.lt).toHaveBeenCalledWith('created_at', expect.any(String));
     expect(update.update).toHaveBeenCalled();
     expect(markDone.update).toHaveBeenCalledWith({ processed_at: expect.any(String) });
+    // The attempt that retook the claim owns it: reclaim sets its id, and completion is scoped to it.
+    const owner = (reclaim.update.mock.calls[0][0] as { attempt_id: string }).attempt_id;
+    expect(owner).toEqual(expect.any(String));
+    expect(markDone.eq).toHaveBeenCalledWith('attempt_id', owner);
+  });
+
+  it('only releases the claim it owns, so a slow attempt cannot delete a retry\'s claim', async () => {
+    const claim = queryBuilder();
+    const release = queryBuilder();
+    from.mockImplementation(fromByTable({ stripe_events: [claim, release] }));
+    event('invoice.payment_failed', { subscription: 'sub_1' });
+    stripe.subscriptions.retrieve.mockRejectedValue(new Error('stripe down'));
+    expect((await hook()).status).toBe(400);
+    const owner = (claim.insert.mock.calls[0][0] as { attempt_id: string }).attempt_id;
+    expect(release.delete).toHaveBeenCalled();
+    expect(release.eq).toHaveBeenCalledWith('id', 'evt_1');
+    expect(release.eq).toHaveBeenCalledWith('attempt_id', owner);
   });
 
   it('marks the event processed after a successful run', async () => {
