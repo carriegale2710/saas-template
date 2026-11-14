@@ -606,6 +606,14 @@ The easiest way to deploy your Next.js app is to use the [Vercel Platform](https
 
 [![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https://github.com/yourusername/your-repo-name)
 
+### Deployment notes: API rate limiting
+
+`proxy.ts` limits `/api/*` to 60 requests per minute per client IP.
+
+- **On Vercel:** nothing to do. The platform supplies the real client IP.
+- **Anywhere else (your own server, Docker, etc.):** put a reverse proxy (nginx, a load balancer, Cloudflare) in front of the app that **appends the real client IP as the rightmost `x-forwarded-for` entry**, and **block direct access to the Node server**. Otherwise a client can invent its own `x-forwarded-for` value on each request and get around the limit. Check this before relying on the limiter.
+- Requests with no client IP are **not limited** (fail open), and counters are **per instance**. For several instances, move the counters to a shared store such as Upstash.
+
 ---
 
 Made with 🔥 by [ShenSeanChen](https://github.com/ShenSeanChen)
