@@ -106,7 +106,9 @@ describe('cancel', () => {
   it('500s when Stripe or the DB update fails', async () => {
     from.mockImplementation(fromByTable({ subscriptions: [owned()] }));
     stripe.subscriptions.retrieve.mockRejectedValue(new Error('stripe down'));
-    expect((await cancel(req({ subscriptionId: 'sub_1' }))).status).toBe(500);
+    const res = await cancel(req({ subscriptionId: 'sub_1' }));
+    expect(res.status).toBe(500);
+    expect(await res.json()).toEqual({ error: 'Failed to cancel subscription' });
 
     from.mockImplementation(fromByTable({ subscriptions: [owned(), queryBuilder({ error: { message: 'write' } })] }));
     stripe.subscriptions.retrieve.mockResolvedValue(stripeSub());
@@ -170,7 +172,9 @@ describe('sync', () => {
     stripe.customers.retrieve.mockResolvedValue({ id: 'cus_1', metadata: {} });
     expect((await sync(req({ subscriptionId: 'sub_1' }))).status).toBe(500);
     stripe.subscriptions.retrieve.mockRejectedValue(new Error('nope'));
-    expect((await sync(req({ subscriptionId: 'sub_1' }))).status).toBe(500);
+    const res = await sync(req({ subscriptionId: 'sub_1' }));
+    expect(res.status).toBe(500);
+    expect(await res.json()).toEqual({ error: 'Failed to sync subscription' });
   });
 
   it('500s when the insert fails', async () => {
@@ -200,5 +204,39 @@ describe('sync', () => {
   it('500s on unexpected lookup errors', async () => {
     from.mockImplementation(fromByTable({ subscriptions: [queryBuilder({ data: null, error: { code: '500', message: 'db' } })] }));
     expect((await sync(req({ subscriptionId: 'sub_1' }))).status).toBe(500);
+  });
+});
+
+
+describe.each([
+  ['cancel', cancel, 'Failed to cancel subscription', 'Subscription cancellation failed:'],
+  ['sync', sync, 'Failed to sync subscription', 'Subscription sync failed:'],
+] as const)('%s error redaction', (_name, handler, message, logMessage) => {
+  it.each([
+    new Error('secret Stripe credential'),
+    { code: 'XX000', message: 'private SQL', details: 'private schema', hint: 'private hint' },
+    'private service failure',
+    null,
+  ])('redacts dependency failures and preserves server diagnostics (%j)', async (failure) => {
+    getAuthenticatedUser.mockRejectedValue(failure);
+
+    const response = await handler(req({ subscriptionId: 'sub_1' }));
+
+    expect(response.status).toBe(500);
+    expect(await response.json()).toEqual({ error: message });
+    expect(console.error).toHaveBeenCalledWith(logMessage, failure);
+    expect(from).not.toHaveBeenCalled();
+  });
+
+  it('redacts structured database lookup errors', async () => {
+    const failure = { code: 'XX000', message: 'private SQL', details: 'private schema', hint: 'private hint' };
+    from.mockImplementation(fromByTable({ subscriptions: [queryBuilder({ error: failure })] }));
+
+    const response = await handler(req({ subscriptionId: 'sub_1' }));
+
+    expect(response.status).toBe(500);
+    expect(await response.json()).toEqual({ error: message });
+    expect(console.error).toHaveBeenCalledWith(logMessage, failure);
+    expect(stripe.subscriptions.update).not.toHaveBeenCalled();
   });
 });

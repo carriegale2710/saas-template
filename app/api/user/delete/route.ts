@@ -60,7 +60,7 @@ export const DELETE = withCors(async function DELETE(request: NextRequest) {
     if (profileError) {
       console.error('Profile update error:', profileError);
       return NextResponse.json(
-        { error: 'Failed to update profile', details: profileError },
+        { error: 'Failed to update profile' },
         { status: 500 }
       );
     }
@@ -83,10 +83,7 @@ export const DELETE = withCors(async function DELETE(request: NextRequest) {
   } catch (error) {
     console.error('Error in account soft-deletion:', error);
     return NextResponse.json(
-      { 
-        error: 'Failed to process account deletion', 
-        details: error instanceof Error ? error.message : 'Unknown error'
-      },
+      { error: 'Failed to process account deletion' },
       { status: 500 }
     );
   }

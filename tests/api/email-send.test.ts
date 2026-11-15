@@ -33,7 +33,8 @@ describe('POST /api/email/send', () => {
 
   it('401s for missing or wrong API key', async () => {
     expect((await call({}, null)).status).toBe(401);
-    expect((await call({}, 'wrong')).status).toBe(401);
+    expect((await call({}, 'wrong')).status).toBe(401); // length mismatch
+    expect((await call({}, 'secreT')).status).toBe(401); // same length
     expect(sendTransactionalEmail).not.toHaveBeenCalled();
   });
 
@@ -47,8 +48,10 @@ describe('POST /api/email/send', () => {
     expect((await call(body)).status).toBe(400);
   });
 
-  it('500s on malformed JSON', async () => {
-    expect((await call('{not json')).status).toBe(500);
+  it('500s on malformed JSON without leaking the error', async () => {
+    const res = await call('{not json');
+    expect(res.status).toBe(500);
+    expect(await res.json()).toEqual({ error: 'Failed to send email' });
   });
 
   it('sends directly to `to` without logging when no userId', async () => {
@@ -128,9 +131,62 @@ describe('POST /api/email/send', () => {
     sendTransactionalEmail.mockResolvedValue({ success: false, error: 'boom' });
     const res = await call({ type: 'cancellation', to: 'a@b.co', userId: 'u1', data: {} });
     expect(res.status).toBe(500);
-    expect(await res.json()).toEqual({ error: 'boom', success: false });
+    expect(await res.json()).toEqual({ error: 'Failed to send email', success: false });
     expect(log.insert).toHaveBeenCalledWith(
       expect.objectContaining({ status: 'failed', error_message: 'boom' })
     );
   });
+
+  it.each([null, '', 's', 'secret-extra', 'Secret', 'sécret', 'écret']) (
+    'rejects API key %j before parsing the body or accessing dependencies',
+    async (key) => {
+      const request = jsonRequest('http://localhost/api/email/send', '{invalid', key ? { 'x-api-key': key } : {});
+      const parse = vi.spyOn(request, 'json');
+
+      const response = await POST(request);
+
+      expect(response.status).toBe(401);
+      expect(await response.json()).toEqual({ error: 'Unauthorized' });
+      expect(parse).not.toHaveBeenCalled();
+      expect(from).not.toHaveBeenCalled();
+      expect(getUserById).not.toHaveBeenCalled();
+      expect(sendTransactionalEmail).not.toHaveBeenCalled();
+    }
+  );
+
+  it('accepts an exact key containing multibyte characters', async () => {
+    vi.stubEnv('INTERNAL_API_KEY', 'sécret');
+    const response = await call({ type: 'welcome', to: 'a@b.co', data: {} }, 'sécret');
+    expect(response.status).toBe(200);
+    expect(sendTransactionalEmail).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    new Error('provider credential: private-token'),
+    { message: 'provider credential: private-token', details: { token: 'private-token' } },
+    'provider credential: private-token',
+    null,
+  ])('redacts thrown provider failures while retaining server diagnostics (%j)', async (failure) => {
+    sendTransactionalEmail.mockRejectedValue(failure);
+
+    const response = await call({ type: 'welcome', to: 'a@b.co', data: {} });
+
+    expect(response.status).toBe(500);
+    expect(await response.json()).toEqual({ error: 'Failed to send email' });
+    expect(console.error).toHaveBeenCalledWith('[Email API] Error:', failure);
+  });
+
+  it.each(['provider credential: private-token', undefined])(
+    'returns a generic provider rejection without a user log (%j)', async (error) => {
+      sendTransactionalEmail.mockResolvedValue({ success: false, error });
+
+      const response = await call({ type: 'welcome', to: 'a@b.co', data: {} });
+
+      expect(response.status).toBe(500);
+      expect(await response.json()).toEqual({ error: 'Failed to send email', success: false });
+      expect(console.error).toHaveBeenCalledWith('Email send failed:', error);
+      expect(from).not.toHaveBeenCalled();
+    }
+  );
+
 });

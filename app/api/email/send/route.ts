@@ -2,6 +2,7 @@
 // API route for sending transactional emails.
 // Can be called from Supabase Edge Functions, webhooks, or internal services.
 
+import { timingSafeEqual } from 'crypto';
 import { NextResponse } from 'next/server';
 import type { NextRequest } from 'next/server';
 import {
@@ -30,6 +31,13 @@ interface SendEmailRequest {
   data: Record<string, unknown>;
 }
 
+/** Constant-time key comparison; timingSafeEqual throws on unequal lengths. */
+function keysMatch(provided: string, expected: string): boolean {
+  const a = Buffer.from(provided);
+  const b = Buffer.from(expected);
+  return a.length === b.length && timingSafeEqual(a, b);
+}
+
 function isEmailData(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
@@ -54,7 +62,7 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    if (!apiKey || apiKey !== expectedKey) {
+    if (!apiKey || !keysMatch(apiKey, expectedKey)) {
       return NextResponse.json(
         { error: 'Unauthorized' },
         { status: 401 }
@@ -186,8 +194,10 @@ export async function POST(request: NextRequest) {
     }
 
     if (!result.success) {
+      // Provider error stays in the DB log above; don't return it to the caller.
+      console.error('Email send failed:', result.error);
       return NextResponse.json(
-        { error: result.error, success: false },
+        { error: 'Failed to send email', success: false },
         { status: 500 }
       );
     }
@@ -199,10 +209,7 @@ export async function POST(request: NextRequest) {
   } catch (error) {
     console.error('[Email API] Error:', error);
     return NextResponse.json(
-      {
-        error: 'Failed to send email',
-        details: error instanceof Error ? error.message : 'Unknown error',
-      },
+      { error: 'Failed to send email' },
       { status: 500 }
     );
   }

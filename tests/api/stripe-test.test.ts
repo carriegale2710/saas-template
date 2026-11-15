@@ -37,7 +37,7 @@ describe('GET /api/stripe/test', () => {
     });
   });
 
-  it('returns a Stripe error when the connection check fails', async () => {
+  it('returns a generic error (not the Stripe message) when the connection check fails', async () => {
     retrieveBalance.mockRejectedValue(new Error('Stripe unavailable'));
 
     const response = await GET(request());
@@ -45,16 +45,28 @@ describe('GET /api/stripe/test', () => {
     expect(response.status).toBe(500);
     expect(await response.json()).toEqual({
       status: 'error',
-      message: 'Stripe unavailable',
+      message: 'Stripe connection failed',
     });
   });
 
-  it('returns a fallback message for non-Error failures', async () => {
+  it('returns the same generic error for non-Error failures', async () => {
     retrieveBalance.mockRejectedValue('failure');
 
     const response = await GET(request());
 
     expect(response.status).toBe(500);
-    expect(await response.json()).toEqual({ status: 'error', message: 'Unknown error' });
+    expect(await response.json()).toEqual({ status: 'error', message: 'Stripe connection failed' });
   });
+
+  it('keeps structured Stripe errors in server logs', async () => {
+    const failure = { message: 'private Stripe details', requestId: 'req_private', raw: { key: 'private-token' } };
+    retrieveBalance.mockRejectedValue(failure);
+
+    const response = await GET(request());
+
+    expect(response.status).toBe(500);
+    expect(await response.json()).toEqual({ status: 'error', message: 'Stripe connection failed' });
+    expect(console.error).toHaveBeenCalledWith('Stripe test failed:', failure);
+  });
+
 });

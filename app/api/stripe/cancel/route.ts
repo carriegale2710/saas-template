@@ -87,10 +87,7 @@ export const POST = withCors(async function POST(request: NextRequest) {
   } catch (error) {
     console.error('Subscription cancellation failed:', error);
     return NextResponse.json(
-      { 
-        error: 'Failed to cancel subscription',
-        details: error instanceof Error ? error.message : 'Unknown error'
-      },
+      { error: 'Failed to cancel subscription' },
       { status: 500 }
     );
   }
